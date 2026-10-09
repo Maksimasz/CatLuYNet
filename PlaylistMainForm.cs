@@ -60,7 +60,7 @@ public sealed class PlaylistMainForm : Form
         var pause = Button("❚❚", Color.FromArgb(42, 42, 42));
         var stop = Button("■", Color.FromArgb(42, 42, 42));
         var next = Button("▶▶", Color.FromArgb(42, 42, 42));
-        var header = new Label { Text = "▶  CatLu YNet 1.0.1", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
+        var header = new Label { Text = "▶  CatLu YNet 1.0.2", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
         var settingsButton = Button("⚙", Color.FromArgb(42, 42, 42)); settingsButton.Dock = DockStyle.Right; settingsButton.Width = 48;
         var headerBar = new Panel { Dock = DockStyle.Fill, BackColor = surfaceColor }; headerBar.Controls.Add(header); headerBar.Controls.Add(settingsButton);
         var stationBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.FromArgb(20, 20, 20), Padding = new Padding(5) };
@@ -487,10 +487,21 @@ public sealed class PlaylistMainForm : Form
     {
         var file = Path.Combine(AppContext.BaseDirectory, "tools", "yt-dlp.exe");
         var start = new ProcessStartInfo(file) { WorkingDirectory = AppContext.BaseDirectory, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+        start.Environment.Remove("PYTHONHOME");
+        start.Environment.Remove("PYTHONPATH");
+        start.Environment.Remove("YTDLP_CONFIG");
+        start.ArgumentList.Add("--ignore-config");
+        start.ArgumentList.Add("--no-cache-dir");
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         using var process = Process.Start(start) ?? throw new InvalidOperationException("yt-dlp не запустился.");
         var output = await process.StandardOutput.ReadToEndAsync(); var error = await process.StandardError.ReadToEndAsync(); await process.WaitForExitAsync();
-        if (process.ExitCode != 0) throw new InvalidOperationException(error.Trim());
+        if (process.ExitCode != 0)
+        {
+            var log = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CatLuYNet", "yt-dlp-error.log");
+            Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+            File.WriteAllText(log, error);
+            throw new InvalidOperationException(error.Trim());
+        }
         return output;
     }
 
