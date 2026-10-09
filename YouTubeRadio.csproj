@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>Assets\CatLuNet2.ico</ApplicationIcon>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>CatLu YNet</Product>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="LibVLCSharp" Version="3.10.1" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.24" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Remove="MainForm.cs" />
+    <None Update="Assets\CatLuNet2.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="tools\yt-dlp.exe" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

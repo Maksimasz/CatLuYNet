@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+  <div id="player"></div>
+  <script>
+    let player, pending, playerReady = false, volume = 70;
+    function report(value) { window.chrome?.webview?.postMessage(value); }
+    function setVolume(value) { volume = value; if (player) { player.setVolume(value); player.unMute(); } }
+    function load(source) {
+      pending = source;
+      if (!playerReady) return;
+      player.loadVideoById(source.id);
+      player.unMute();
+      player.setVolume(volume);
+      setTimeout(() => player.playVideo(), 250);
+    }
+    function onYouTubeIframeAPIReady() {
+      player = new YT.Player('player', {
+        height: 200, width: 200,
+        playerVars: { autoplay: 1, playsinline: 1, controls: 0, origin: 'https://player.local' },
+        events: {
+          onReady: () => { playerReady = true; report('YouTube готов к воспроизведению'); setVolume(volume); if (pending) load(pending); },
+          onStateChange: event => report(({ '-1': 'Готов к запуску', 0: 'Видео завершено', 1: 'Играет', 2: 'Пауза', 3: 'Буферизация', 5: 'Видео загружено' })[event.data] ?? `Состояние: ${event.data}`),
+          onError: event => report(`Ошибка YouTube: ${event.data}`)
+        }
+      });
+    }
+  </script>
+  <script src="https://www.youtube.com/iframe_api"></script>
+</body>
+</html>
