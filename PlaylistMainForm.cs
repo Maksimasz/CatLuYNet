@@ -18,6 +18,11 @@ public sealed class PlaylistMainForm : Form
     private readonly string oldStatePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "YouTubeRadio", "state.json");
     private AppSettings settings = new();
     private readonly System.Windows.Forms.Timer infoTimer = new() { Interval = 500 };
+    private readonly System.Windows.Forms.Timer visualizerTimer = new() { Interval = 70 };
+    private readonly Panel visualizer = new() { Dock = DockStyle.Fill, Margin = Padding.Empty, Visible = false };
+    private RowStyle? visualizerRow;
+    private RowStyle? bottomRow;
+    private int visualizerPhase;
     private readonly HttpClient http = new();
     private Button? settingsButton;
     private Label? updateBadge;
@@ -65,7 +70,7 @@ public sealed class PlaylistMainForm : Form
         var pause = Button("❚❚", Color.FromArgb(42, 42, 42));
         var stop = Button("■", Color.FromArgb(42, 42, 42));
         var next = Button("▶▶", Color.FromArgb(42, 42, 42));
-        var header = new Label { Text = "▶  CatLu YNet 1.1", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
+        var header = new Label { Text = "▶  CatLu YNet 1.1.1", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
         settingsButton = Button("⚙", Color.FromArgb(42, 42, 42)); settingsButton.Dock = DockStyle.Fill;
         updateBadge = new Label { Text = "1", Visible = false, AutoSize = false, Width = 18, Height = 18, Left = 27, Top = 3, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(229, 9, 20), ForeColor = Color.White, Font = new Font("Segoe UI", 8, FontStyle.Bold) };
         var settingsSlot = new Panel { Dock = DockStyle.Right, Width = 48, BackColor = surfaceColor }; settingsSlot.Controls.Add(settingsButton); settingsSlot.Controls.Add(updateBadge);
@@ -91,18 +96,21 @@ public sealed class PlaylistMainForm : Form
         var statusRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, BackColor = surfaceColor };
         statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100)); statusRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 82));
         statusRow.Controls.Add(status, 0, 0); statusRow.Controls.Add(clock, 1, 0);
-        var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, BackColor = Color.FromArgb(20, 20, 20) };
+        var bottom = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, BackColor = Color.FromArgb(20, 20, 20) };
         bottom.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        visualizerRow = new RowStyle(SizeType.Absolute, 0);
+        bottom.RowStyles.Add(visualizerRow);
         bottom.RowStyles.Add(new RowStyle(SizeType.Absolute, 56));
         bottom.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
-        bottom.Controls.Add(controlRow, 0, 0);
-        bottom.Controls.Add(statusRow, 0, 1);
+        bottom.Controls.Add(visualizer, 0, 0);
+        bottom.Controls.Add(controlRow, 0, 1);
+        bottom.Controls.Add(statusRow, 0, 2);
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, BackColor = BackColor };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 86));
+        bottomRow = new RowStyle(SizeType.Absolute, 86); root.RowStyles.Add(bottomRow);
         root.Controls.Add(headerBar, 0, 0);
         root.Controls.Add(input, 0, 1);
         root.Controls.Add(stationBar, 0, 2);
@@ -126,7 +134,10 @@ public sealed class PlaylistMainForm : Form
         crossfadeTimer.Tick += async (_, _) => await HandleCrossfadeAsync();
         settingsButton.Click += (_, _) => ShowSettings();
         infoTimer.Tick += (_, _) => UpdateInfo();
+        visualizer.Paint += (_, e) => DrawVisualizer(e.Graphics, visualizer.ClientRectangle);
+        visualizerTimer.Tick += (_, _) => { if (visualizer.Visible && player.IsPlaying) { visualizerPhase++; visualizer.Invalidate(); } };
         infoTimer.Start();
+        visualizerTimer.Start();
         ApplySettings();
     }
 
@@ -186,10 +197,11 @@ public sealed class PlaylistMainForm : Form
         return selected;
     }
 
-    private void RenderPlaylists()
+    private void RenderPlaylists(bool focusCurrent = false)
     {
         playlistHost.SuspendLayout();
         playlistHost.Controls.Clear();
+        Panel? activeRow = null;
         var width = Math.Max(420, playlistHost.ClientSize.Width - 30);
         foreach (var playlist in playlists)
         {
@@ -206,28 +218,40 @@ public sealed class PlaylistMainForm : Form
             if (playlist.Expanded)
             {
                 var top = 48;
-                for (var i = 0; i < playlist.Tracks.Count; i++) { AddTrackRow(card, playlist, playlist.Tracks[i], top, rowHeights[i]); top += rowHeights[i]; }
+                for (var i = 0; i < playlist.Tracks.Count; i++)
+                {
+                    var row = AddTrackRow(card, playlist, playlist.Tracks[i], top, rowHeights[i]);
+                    if (ReferenceEquals(playlist, currentPlaylist) && ReferenceEquals(playlist.Tracks[i], currentTrack)) activeRow = row;
+                    top += rowHeights[i];
+                }
             }
             playlistHost.Controls.Add(card);
         }
         playlistHost.ResumeLayout();
+        if (focusCurrent && activeRow is not null) BeginInvoke(() => playlistHost.ScrollControlIntoView(activeRow));
     }
 
-    private void AddTrackRow(Panel card, Playlist playlist, Track track, int top, int height)
+    private Panel AddTrackRow(Panel card, Playlist playlist, Track track, int top, int height)
     {
-        var row = new Panel { Left = 0, Top = top, Width = card.Width, Height = height, BackColor = cardColor, Cursor = Cursors.Hand };
+        var active = ReferenceEquals(playlist, currentPlaylist) && ReferenceEquals(track, currentTrack);
+        var activeColor = Color.FromArgb((cardColor.R + accentColor.R) / 2, (cardColor.G + accentColor.G) / 2, (cardColor.B + accentColor.B) / 2);
+        var row = new Panel { Left = 0, Top = top, Width = card.Width, Height = height, BackColor = active ? activeColor : cardColor, BorderStyle = active ? BorderStyle.FixedSingle : BorderStyle.None, Cursor = Cursors.Hand };
         var titleHeight = TextRenderer.MeasureText(track.Name, new Font("Segoe UI", 10, FontStyle.Bold), new Size(row.Width - 10, int.MaxValue), TextFormatFlags.WordBreak).Height;
         var title = new Label { Text = track.Name, Left = 5, Top = 5, Width = row.Width - 10, Height = titleHeight, ForeColor = textColor, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
         var artist = new Label { Text = track.Artist, Left = 5, Top = 5 + titleHeight, Width = row.Width - 10, Height = 18, ForeColor = mutedColor };
-        EventHandler play = async (_, _) => { currentPlaylist = playlist; currentTrack = track; await PlayCurrentAsync(); };
+        Label? source = null;
+        if (settings.ShowYoutubeLinks) source = new Label { Text = $"https://www.youtube.com/watch?v={track.Id}", Left = 5, Top = artist.Bottom, Width = row.Width - 10, Height = 18, ForeColor = accentColor, Font = new Font("Segoe UI", 8, FontStyle.Underline), Cursor = Cursors.Hand };
+        EventHandler play = async (_, _) => { currentPlaylist = playlist; currentTrack = track; RenderPlaylists(true); await PlayCurrentAsync(); };
         row.Click += play; title.Click += play; artist.Click += play;
-        row.Controls.Add(title); row.Controls.Add(artist); card.Controls.Add(row);
+        if (source is not null) source.Click += (_, _) => Process.Start(new ProcessStartInfo(source.Text) { UseShellExecute = true });
+        row.Controls.Add(title); row.Controls.Add(artist); if (source is not null) row.Controls.Add(source); card.Controls.Add(row);
+        return row;
     }
 
-    private static int TrackHeight(Track track, int width)
+    private int TrackHeight(Track track, int width)
     {
         var measured = TextRenderer.MeasureText(track.Name, new Font("Segoe UI", 10, FontStyle.Bold), new Size(Math.Max(120, width - 10), int.MaxValue), TextFormatFlags.WordBreak);
-        return Math.Max(44, measured.Height + 28);
+        return Math.Max(44, measured.Height + 28 + (settings.ShowYoutubeLinks ? 18 : 0));
     }
 
     private void EditPlaylist(Playlist playlist)
@@ -337,6 +361,8 @@ public sealed class PlaylistMainForm : Form
             currentTrack = currentPlaylist?.Tracks.FirstOrDefault();
         }
         if (currentTrack is null) return;
+        currentPlaylist!.Expanded = true;
+        RenderPlaylists(true);
         crossfadeAttemptedTrack = null;
         try
         {
@@ -359,6 +385,7 @@ public sealed class PlaylistMainForm : Form
         if (currentPlaylist is null || currentTrack is null) return;
         Stop();
         currentTrack = GetNextTrack();
+        RenderPlaylists(true);
         await PlayCurrentAsync();
     }
 
@@ -436,11 +463,13 @@ public sealed class PlaylistMainForm : Form
         player = incomingPlayer!;
         media = incomingMedia;
         currentTrack = incomingTrack;
+        currentPlaylist!.Expanded = true;
         incomingPlayer = null; incomingMedia = null; incomingTrack = null;
         player.Volume = volume.Value;
         isCrossfading = false;
         crossfadeAttemptedTrack = null;
         outgoingPlayer.Dispose();
+        RenderPlaylists(true);
         status.Text = $"Играет: {currentTrack?.Name}";
     }
 
@@ -545,7 +574,7 @@ public sealed class PlaylistMainForm : Form
 
     private void ShowSettings()
     {
-        using var dialog = new Form { Text = T("settings"), Size = new Size(430, 410), StartPosition = FormStartPosition.CenterParent, BackColor = surfaceColor, ForeColor = textColor, Padding = new Padding(5), MinimizeBox = false, MaximizeBox = false };
+        using var dialog = new Form { Text = T("settings"), Size = new Size(430, 540), StartPosition = FormStartPosition.CenterParent, BackColor = surfaceColor, ForeColor = textColor, Padding = new Padding(5), MinimizeBox = false, MaximizeBox = false };
         var theme = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
         theme.Items.AddRange(["Системная", "Тёмная", "Светлая", "Apple", "YouTube", "Spotify", "Netflix"]); theme.SelectedIndex = Math.Clamp(settings.Theme, 0, 6);
         var language = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -554,18 +583,20 @@ public sealed class PlaylistMainForm : Form
         var showInfo = new CheckBox { Text = T("trackInfo"), Checked = settings.ShowTrackInfo, AutoSize = true };
         var normalize = new CheckBox { Text = T("normalize"), Checked = settings.NormalizeAudio, AutoSize = true };
         var crossfade = new CheckBox { Text = T("crossfade"), Checked = settings.Crossfade, AutoSize = true };
-        var checkUpdates = Button(T("checkUpdates"), cardColor); checkUpdates.Dock = DockStyle.Left;
-        var save = Button(T("save"), accentColor); save.Dock = DockStyle.Right;
-        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 8, Padding = new Padding(5) };
+        var musicLights = new CheckBox { Text = T("musicLights"), Checked = settings.MusicLights, AutoSize = true };
+        var youtubeLinks = new CheckBox { Text = T("youtubeLinks"), Checked = settings.ShowYoutubeLinks, AutoSize = true };
+        var checkUpdates = Button(T("checkUpdates"), cardColor); checkUpdates.AutoSize = false; checkUpdates.Size = new Size(235, 32); checkUpdates.Anchor = AnchorStyles.Top | AnchorStyles.Left; checkUpdates.Margin = Padding.Empty; checkUpdates.TextAlign = ContentAlignment.MiddleCenter;
+        var save = Button(T("save"), accentColor); save.AutoSize = false; save.Size = new Size(120, 32); save.Anchor = AnchorStyles.Top | AnchorStyles.Right; save.Margin = Padding.Empty; save.TextAlign = ContentAlignment.MiddleCenter;
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 10, Padding = new Padding(5) };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 8; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        for (var i = 0; i < 10; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         grid.Controls.Add(new Label { Text = T("theme"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0); grid.Controls.Add(theme, 1, 0);
         grid.Controls.Add(new Label { Text = T("language"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1); grid.Controls.Add(language, 1, 1);
-        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(checkUpdates, 1, 6); grid.Controls.Add(save, 1, 7);
+        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(musicLights, 1, 6); grid.Controls.Add(youtubeLinks, 1, 7); grid.Controls.Add(checkUpdates, 1, 8); grid.Controls.Add(save, 1, 9);
         dialog.Controls.Add(grid);
         save.Click += (_, _) =>
         {
-            settings.Theme = theme.SelectedIndex; settings.Language = language.SelectedIndex; settings.ShowClock = showClock.Checked; settings.ShowTrackInfo = showInfo.Checked; settings.NormalizeAudio = normalize.Checked; settings.Crossfade = crossfade.Checked;
+            settings.Theme = theme.SelectedIndex; settings.Language = language.SelectedIndex; settings.ShowClock = showClock.Checked; settings.ShowTrackInfo = showInfo.Checked; settings.NormalizeAudio = normalize.Checked; settings.Crossfade = crossfade.Checked; settings.MusicLights = musicLights.Checked; settings.ShowYoutubeLinks = youtubeLinks.Checked;
             SaveSettings(); ApplySettings(); dialog.Close();
         };
         checkUpdates.Click += async (_, _) => await CheckForUpdateAsync(true);
@@ -586,6 +617,7 @@ public sealed class PlaylistMainForm : Form
             _ => (Color.FromArgb(245, 245, 245), Color.White, Color.FromArgb(230, 230, 230), Color.FromArgb(0, 120, 215), Color.FromArgb(20, 20, 20), Color.FromArgb(90, 90, 90))
         };
         BackColor = pageColor; ApplyColors(this); playlistHost.BackColor = pageColor; clock.Visible = settings.ShowClock;
+        visualizer.Visible = settings.MusicLights; visualizerRow!.Height = settings.MusicLights ? 42 : 0; bottomRow!.Height = settings.MusicLights ? 128 : 86; visualizer.Invalidate();
         RightToLeft = CurrentLanguage() == "he" ? RightToLeft.Yes : RightToLeft.No;
         foreach (var (control, key) in localizedControls) control.Text = T(key);
         urlBox.PlaceholderText = T("url"); RenderPlaylists(); UpdateInfo();
@@ -613,6 +645,28 @@ public sealed class PlaylistMainForm : Form
     }
     private static string FormatTime(long milliseconds) => milliseconds <= 0 ? "--:--" : TimeSpan.FromMilliseconds(milliseconds).ToString(@"m\:ss");
     private static bool SystemThemeIsDark() => Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
+
+    private void DrawVisualizer(Graphics graphics, Rectangle area)
+    {
+        graphics.Clear(surfaceColor);
+        var count = 20; var gap = 4; var width = Math.Max(4, (area.Width - gap * (count + 1)) / count);
+        var colors = new[] { Color.FromArgb(0, 229, 255), Color.FromArgb(41, 121, 255), Color.FromArgb(124, 77, 255), Color.FromArgb(245, 0, 87), Color.FromArgb(255, 64, 129), Color.FromArgb(118, 255, 3) };
+        for (var i = 0; i < count; i++)
+        {
+            var wave = (Math.Sin((visualizerPhase * 1.35 + i * 3) * 0.58) + Math.Sin((visualizerPhase + i * 5) * 0.31) + 2d) / 4d;
+            var height = 8 + (int)((area.Height - 14) * wave);
+            using var brush = new SolidBrush(colors[i % colors.Length]);
+            graphics.FillRectangle(brush, gap + i * (width + gap), area.Bottom - height - 4, width, height);
+        }
+        for (var i = 0; i < 10; i++)
+        {
+            var x = (int)((Math.Sin((visualizerPhase + i * 11) * 0.23) + 1d) * (area.Width - 12) / 2d);
+            var y = 4 + (int)((Math.Cos((visualizerPhase + i * 7) * 0.37) + 1d) * Math.Max(1, area.Height - 14) / 2d);
+            var size = 3 + (visualizerPhase + i) % 4;
+            using var flash = new SolidBrush(Color.FromArgb(210, colors[(i + visualizerPhase / 4) % colors.Length]));
+            graphics.FillEllipse(flash, x, y, size, size);
+        }
+    }
 
     private AppSettings LoadSettings()
     {
@@ -671,13 +725,13 @@ public sealed class PlaylistMainForm : Form
     }
 
     private sealed class Library { public List<Playlist> Playlists { get; set; } = []; }
-    private sealed class AppSettings { public int Theme { get; set; } = 0; public int Language { get; set; } = 0; public bool ShowClock { get; set; } = false; public bool ShowTrackInfo { get; set; } = false; public bool NormalizeAudio { get; set; } = true; public bool Crossfade { get; set; } = true; }
+    private sealed class AppSettings { public int Theme { get; set; } = 0; public int Language { get; set; } = 0; public bool ShowClock { get; set; } = false; public bool ShowTrackInfo { get; set; } = false; public bool NormalizeAudio { get; set; } = true; public bool Crossfade { get; set; } = true; public bool MusicLights { get; set; } = false; public bool ShowYoutubeLinks { get; set; } = false; }
     private sealed class Playlist { public string Name { get; set; } = ""; public bool Expanded { get; set; } = true; public List<Track> Tracks { get; set; } = []; }
     private sealed class Track { public string Id { get; set; } = ""; public string Name { get; set; } = ""; public string Artist { get; set; } = ""; }
 
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
-        ["ru"] = new() { ["save"] = "Сохранить", ["newPlaylist"] = "+ СОЗДАТЬ ПЛЕЙЛИСТ", ["stations"] = "Станции", ["volume"] = "Громкость", ["settings"] = "Настройки", ["theme"] = "Тема", ["language"] = "Язык", ["clock"] = "Показывать часы", ["trackInfo"] = "Информация о треке", ["normalize"] = "Выравнивание звука", ["crossfade"] = "Кроссфейд", ["checkUpdates"] = "Проверить обновления", ["updates"] = "Обновления", ["upToDate"] = "Установлена последняя версия.", ["updateError"] = "Не удалось проверить обновления", ["playing"] = "Играет", ["url"] = "Вставьте ссылку на ролик или плейлист YouTube" },
+        ["ru"] = new() { ["save"] = "Сохранить", ["newPlaylist"] = "+ СОЗДАТЬ ПЛЕЙЛИСТ", ["stations"] = "Станции", ["volume"] = "Громкость", ["settings"] = "Настройки", ["theme"] = "Тема", ["language"] = "Язык", ["clock"] = "Показывать часы", ["trackInfo"] = "Информация о треке", ["normalize"] = "Выравнивание звука", ["crossfade"] = "Кроссфейд", ["musicLights"] = "Цветомузыка", ["youtubeLinks"] = "Показывать ссылки YouTube", ["checkUpdates"] = "Проверить обновления", ["updates"] = "Обновления", ["upToDate"] = "Установлена последняя версия.", ["updateError"] = "Не удалось проверить обновления", ["playing"] = "Играет", ["url"] = "Вставьте ссылку на ролик или плейлист YouTube" },
         ["en"] = new() { ["save"] = "Save", ["newPlaylist"] = "+ CREATE PLAYLIST", ["stations"] = "Stations", ["volume"] = "Volume", ["settings"] = "Settings", ["theme"] = "Theme", ["language"] = "Language", ["clock"] = "Show clock", ["trackInfo"] = "Track information", ["normalize"] = "Normalize audio", ["crossfade"] = "Crossfade", ["playing"] = "Playing", ["url"] = "Paste a YouTube video or playlist link" },
         ["he"] = new() { ["save"] = "שמור", ["newPlaylist"] = "+ פלייליסט חדש", ["stations"] = "תחנות", ["volume"] = "עוצמה", ["settings"] = "הגדרות", ["theme"] = "ערכת נושא", ["language"] = "שפה", ["clock"] = "הצג שעון", ["trackInfo"] = "פרטי רצועה", ["normalize"] = "איזון עוצמה", ["crossfade"] = "מעבר חלק", ["playing"] = "מנגן", ["url"] = "הדביקו קישור YouTube" },
         ["lt"] = new() { ["save"] = "Išsaugoti", ["newPlaylist"] = "+ NAUJAS GROJARAŠTIS", ["stations"] = "Stotys", ["volume"] = "Garsumas", ["settings"] = "Nustatymai", ["theme"] = "Tema", ["language"] = "Kalba", ["clock"] = "Rodyti laikrodį", ["trackInfo"] = "Takelio informacija", ["normalize"] = "Garso lyginimas", ["crossfade"] = "Kryžminis perėjimas", ["playing"] = "Groja", ["url"] = "Įklijuokite YouTube nuorodą" }
