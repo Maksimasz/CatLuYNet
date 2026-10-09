@@ -18,6 +18,11 @@ public sealed class PlaylistMainForm : Form
     private readonly string oldStatePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "YouTubeRadio", "state.json");
     private AppSettings settings = new();
     private readonly System.Windows.Forms.Timer infoTimer = new() { Interval = 500 };
+    private readonly HttpClient http = new();
+    private Button? settingsButton;
+    private Label? updateBadge;
+    private string? updateUrl;
+    private bool checkingUpdate;
     private readonly Dictionary<Control, string> localizedControls = [];
     private Color pageColor = Color.FromArgb(15, 15, 15);
     private Color surfaceColor = Color.FromArgb(20, 20, 20);
@@ -60,9 +65,11 @@ public sealed class PlaylistMainForm : Form
         var pause = Button("❚❚", Color.FromArgb(42, 42, 42));
         var stop = Button("■", Color.FromArgb(42, 42, 42));
         var next = Button("▶▶", Color.FromArgb(42, 42, 42));
-        var header = new Label { Text = "▶  CatLu YNet 1.0.3", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
-        var settingsButton = Button("⚙", Color.FromArgb(42, 42, 42)); settingsButton.Dock = DockStyle.Right; settingsButton.Width = 48;
-        var headerBar = new Panel { Dock = DockStyle.Fill, BackColor = surfaceColor }; headerBar.Controls.Add(header); headerBar.Controls.Add(settingsButton);
+        var header = new Label { Text = "▶  CatLu YNet 1.1", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
+        settingsButton = Button("⚙", Color.FromArgb(42, 42, 42)); settingsButton.Dock = DockStyle.Fill;
+        updateBadge = new Label { Text = "1", Visible = false, AutoSize = false, Width = 18, Height = 18, Left = 27, Top = 3, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(229, 9, 20), ForeColor = Color.White, Font = new Font("Segoe UI", 8, FontStyle.Bold) };
+        var settingsSlot = new Panel { Dock = DockStyle.Right, Width = 48, BackColor = surfaceColor }; settingsSlot.Controls.Add(settingsButton); settingsSlot.Controls.Add(updateBadge);
+        var headerBar = new Panel { Dock = DockStyle.Fill, BackColor = surfaceColor }; headerBar.Controls.Add(header); headerBar.Controls.Add(settingsSlot);
         var stationBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.FromArgb(20, 20, 20), Padding = new Padding(5) };
         stationBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         stationBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
@@ -105,7 +112,7 @@ public sealed class PlaylistMainForm : Form
 
         RegisterLocalized(save, "save"); RegisterLocalized(create, "newPlaylist"); RegisterLocalized(stationTitle, "stations"); RegisterLocalized(volumeTitle, "volume");
 
-        Load += (_, _) => LoadLibrary();
+        Load += async (_, _) => { LoadLibrary(); await CheckForUpdateAsync(false); };
         FormClosing += (_, _) => { SaveLibrary(); Stop(); player.Dispose(); vlc.Dispose(); };
         Resize += (_, _) => RenderPlaylists();
         save.Click += async (_, _) => await SaveLinkAsync();
@@ -507,9 +514,38 @@ public sealed class PlaylistMainForm : Form
         return output;
     }
 
+    private async Task CheckForUpdateAsync(bool showResult)
+    {
+        if (checkingUpdate) return;
+        checkingUpdate = true;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Maksimasz/CatLuYNet/releases/latest");
+            request.Headers.UserAgent.ParseAdd("CatLuYNet/1.0");
+            using var response = await http.SendAsync(request);
+            response.EnsureSuccessStatusCode();
+            using var release = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            var tag = release.RootElement.GetProperty("tag_name").GetString()?.TrimStart('v') ?? "0.0.0";
+            var newest = Version.Parse(tag);
+            var current = typeof(PlaylistMainForm).Assembly.GetName().Version ?? new Version(0, 0);
+            if (newest > current)
+            {
+                updateUrl = release.RootElement.GetProperty("assets").EnumerateArray().FirstOrDefault(asset => asset.GetProperty("name").GetString()?.EndsWith("-Setup.exe", StringComparison.OrdinalIgnoreCase) == true).GetProperty("browser_download_url").GetString();
+                if (!string.IsNullOrWhiteSpace(updateUrl)) updateBadge!.Visible = true;
+                if (showResult && MessageBox.Show($"Доступна версия {newest}. Скачать установщик?", T("updates"), MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes) Process.Start(new ProcessStartInfo(updateUrl!) { UseShellExecute = true });
+            }
+            else if (showResult) MessageBox.Show(T("upToDate"), T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex)
+        {
+            if (showResult) MessageBox.Show($"{T("updateError")}: {Short(ex.Message)}", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        finally { checkingUpdate = false; }
+    }
+
     private void ShowSettings()
     {
-        using var dialog = new Form { Text = T("settings"), Size = new Size(430, 370), StartPosition = FormStartPosition.CenterParent, BackColor = surfaceColor, ForeColor = textColor, Padding = new Padding(5), MinimizeBox = false, MaximizeBox = false };
+        using var dialog = new Form { Text = T("settings"), Size = new Size(430, 410), StartPosition = FormStartPosition.CenterParent, BackColor = surfaceColor, ForeColor = textColor, Padding = new Padding(5), MinimizeBox = false, MaximizeBox = false };
         var theme = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
         theme.Items.AddRange(["Системная", "Тёмная", "Светлая", "Apple", "YouTube", "Spotify", "Netflix"]); theme.SelectedIndex = Math.Clamp(settings.Theme, 0, 6);
         var language = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -518,19 +554,21 @@ public sealed class PlaylistMainForm : Form
         var showInfo = new CheckBox { Text = T("trackInfo"), Checked = settings.ShowTrackInfo, AutoSize = true };
         var normalize = new CheckBox { Text = T("normalize"), Checked = settings.NormalizeAudio, AutoSize = true };
         var crossfade = new CheckBox { Text = T("crossfade"), Checked = settings.Crossfade, AutoSize = true };
+        var checkUpdates = Button(T("checkUpdates"), cardColor); checkUpdates.Dock = DockStyle.Left;
         var save = Button(T("save"), accentColor); save.Dock = DockStyle.Right;
-        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 7, Padding = new Padding(5) };
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 8, Padding = new Padding(5) };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 7; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        for (var i = 0; i < 8; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         grid.Controls.Add(new Label { Text = T("theme"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0); grid.Controls.Add(theme, 1, 0);
         grid.Controls.Add(new Label { Text = T("language"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1); grid.Controls.Add(language, 1, 1);
-        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(save, 1, 6);
+        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(checkUpdates, 1, 6); grid.Controls.Add(save, 1, 7);
         dialog.Controls.Add(grid);
         save.Click += (_, _) =>
         {
             settings.Theme = theme.SelectedIndex; settings.Language = language.SelectedIndex; settings.ShowClock = showClock.Checked; settings.ShowTrackInfo = showInfo.Checked; settings.NormalizeAudio = normalize.Checked; settings.Crossfade = crossfade.Checked;
             SaveSettings(); ApplySettings(); dialog.Close();
         };
+        checkUpdates.Click += async (_, _) => await CheckForUpdateAsync(true);
         dialog.ShowDialog(this);
     }
 
@@ -639,7 +677,7 @@ public sealed class PlaylistMainForm : Form
 
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
-        ["ru"] = new() { ["save"] = "Сохранить", ["newPlaylist"] = "+ СОЗДАТЬ ПЛЕЙЛИСТ", ["stations"] = "Станции", ["volume"] = "Громкость", ["settings"] = "Настройки", ["theme"] = "Тема", ["language"] = "Язык", ["clock"] = "Показывать часы", ["trackInfo"] = "Информация о треке", ["normalize"] = "Выравнивание звука", ["crossfade"] = "Кроссфейд", ["playing"] = "Играет", ["url"] = "Вставьте ссылку на ролик или плейлист YouTube" },
+        ["ru"] = new() { ["save"] = "Сохранить", ["newPlaylist"] = "+ СОЗДАТЬ ПЛЕЙЛИСТ", ["stations"] = "Станции", ["volume"] = "Громкость", ["settings"] = "Настройки", ["theme"] = "Тема", ["language"] = "Язык", ["clock"] = "Показывать часы", ["trackInfo"] = "Информация о треке", ["normalize"] = "Выравнивание звука", ["crossfade"] = "Кроссфейд", ["checkUpdates"] = "Проверить обновления", ["updates"] = "Обновления", ["upToDate"] = "Установлена последняя версия.", ["updateError"] = "Не удалось проверить обновления", ["playing"] = "Играет", ["url"] = "Вставьте ссылку на ролик или плейлист YouTube" },
         ["en"] = new() { ["save"] = "Save", ["newPlaylist"] = "+ CREATE PLAYLIST", ["stations"] = "Stations", ["volume"] = "Volume", ["settings"] = "Settings", ["theme"] = "Theme", ["language"] = "Language", ["clock"] = "Show clock", ["trackInfo"] = "Track information", ["normalize"] = "Normalize audio", ["crossfade"] = "Crossfade", ["playing"] = "Playing", ["url"] = "Paste a YouTube video or playlist link" },
         ["he"] = new() { ["save"] = "שמור", ["newPlaylist"] = "+ פלייליסט חדש", ["stations"] = "תחנות", ["volume"] = "עוצמה", ["settings"] = "הגדרות", ["theme"] = "ערכת נושא", ["language"] = "שפה", ["clock"] = "הצג שעון", ["trackInfo"] = "פרטי רצועה", ["normalize"] = "איזון עוצמה", ["crossfade"] = "מעבר חלק", ["playing"] = "מנגן", ["url"] = "הדביקו קישור YouTube" },
         ["lt"] = new() { ["save"] = "Išsaugoti", ["newPlaylist"] = "+ NAUJAS GROJARAŠTIS", ["stations"] = "Stotys", ["volume"] = "Garsumas", ["settings"] = "Nustatymai", ["theme"] = "Tema", ["language"] = "Kalba", ["clock"] = "Rodyti laikrodį", ["trackInfo"] = "Takelio informacija", ["normalize"] = "Garso lyginimas", ["crossfade"] = "Kryžminis perėjimas", ["playing"] = "Groja", ["url"] = "Įklijuokite YouTube nuorodą" }
