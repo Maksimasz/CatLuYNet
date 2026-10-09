@@ -1,5 +1,5 @@
 #define AppName "CatLu YNet"
-#define AppVersion "1.0.2"
+#define AppVersion "1.0.3"
 #define AppPublisher "CatLu"
 #define AppExeName "YouTubeRadio.exe"
 
@@ -12,7 +12,7 @@ DefaultDirName={autopf}\CatLu YNet
 DefaultGroupName=CatLu YNet
 DisableProgramGroupPage=yes
 OutputDir=Output
-OutputBaseFilename=CatLuYNet-1.0.2-Setup
+OutputBaseFilename=CatLuYNet-1.0.3-Setup
 SetupIconFile=..\Assets\CatLuNet2.ico
 Compression=lzma2
 SolidCompression=yes

@@ -60,7 +60,7 @@ public sealed class PlaylistMainForm : Form
         var pause = Button("❚❚", Color.FromArgb(42, 42, 42));
         var stop = Button("■", Color.FromArgb(42, 42, 42));
         var next = Button("▶▶", Color.FromArgb(42, 42, 42));
-        var header = new Label { Text = "▶  CatLu YNet 1.0.2", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
+        var header = new Label { Text = "▶  CatLu YNet 1.0.3", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
         var settingsButton = Button("⚙", Color.FromArgb(42, 42, 42)); settingsButton.Dock = DockStyle.Right; settingsButton.Width = 48;
         var headerBar = new Panel { Dock = DockStyle.Fill, BackColor = surfaceColor }; headerBar.Controls.Add(header); headerBar.Controls.Add(settingsButton);
         var stationBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.FromArgb(20, 20, 20), Padding = new Padding(5) };
@@ -302,6 +302,7 @@ public sealed class PlaylistMainForm : Form
                 if (playlist.Tracks.All(item => item.Id != track.Id)) playlist.Tracks.Add(track);
                 link.Clear(); RefreshTracks(); SaveLibrary(); RenderPlaylists();
             }
+            catch (Exception ex) { MessageBox.Show(Short(ex.Message), "Ошибка добавления", MessageBoxButtons.OK, MessageBoxIcon.Error); }
             finally { add.Enabled = true; }
         };
         close.Click += (_, _) => dialog.Close();
@@ -490,6 +491,7 @@ public sealed class PlaylistMainForm : Form
         start.Environment.Remove("PYTHONHOME");
         start.Environment.Remove("PYTHONPATH");
         start.Environment.Remove("YTDLP_CONFIG");
+        start.Environment["PATH"] = Environment.SystemDirectory;
         start.ArgumentList.Add("--ignore-config");
         start.ArgumentList.Add("--no-cache-dir");
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
