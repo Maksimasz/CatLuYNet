@@ -42,7 +42,7 @@ dotnet run --project tests\RegressionTests.csproj
 ## Сборка установщика
 
 ```powershell
-dotnet publish YouTubeRadio.csproj -c Release -r win-x64 --self-contained true -o publish\win-x64-1.1.2
+dotnet publish YouTubeRadio.csproj -c Release -r win-x64 --self-contained true -o publish\win-x64-1.1.3
 & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\CatLuYNet.iss
 ```
 

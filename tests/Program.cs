@@ -4,6 +4,7 @@ using System.Reflection;
 using System.Text.Json;
 using LibVLCSharp.Shared;
 using YouTubeRadio;
+using CatLuYNet.Core;
 
 internal static class Program
 {
@@ -33,6 +34,7 @@ internal static class Program
         try
         {
             TestUrlsAndTime();
+            TestSharedCore(directory);
             TestStorage(directory);
             TestPlaybackAndControls(directory);
             // No WinForms continuation is needed by the subprocess checks.
@@ -61,7 +63,7 @@ internal static class Program
     }
     private static PlaylistMainForm NewForm(string directory) => (PlaylistMainForm)Activator.CreateInstance(
         FormType, PrivateInstance, null, [directory, Path.Combine(directory, "legacy.json")], null)!;
-    private static object Model(string name) => Activator.CreateInstance(FormType.GetNestedType(name, BindingFlags.NonPublic)!)!;
+    private static object Model(string name) => Activator.CreateInstance(name == "Playlist" ? typeof(Playlist) : typeof(Track))!;
     private static void Property(object target, string name, object value) => target.GetType().GetProperty(name)!.SetValue(target, value);
 
     private static void TestUrlsAndTime()
@@ -81,6 +83,23 @@ internal static class Program
         Check((string)Call(null, "FormatTime", 3660000L)! == "1:01:00", "hours");
         Check((string)Call(null, "FormatTime", 90061000L)! == "25:01:01", "more than one day");
         Check((string)Call(null, "FormatTime", 61000L)! == "1:01", "minutes");
+    }
+
+    private static void TestSharedCore(string root)
+    {
+        Check(YouTubeUrl.IsValid("https://youtube.com/playlist?list=PL123", out var isPlaylist) && isPlaylist, "shared playlist parser");
+        Check(YouTubeUrl.GetPlaylistId("https://youtube.com/playlist?list=PL123") == "PL123", "shared playlist id");
+        var path = Path.Combine(root, "shared", "stations.json");
+        var linked = new Playlist { Name = "Shared", SourceUrl = "https://youtube.com/playlist?list=PL123", LastCheckedUtc = DateTime.UtcNow, Tracks = [new Track { Id = "dQw4w9WgXcQ", Name = "Track", Artist = "Artist", IsNew = true }] };
+        PlaylistStore.Save(path, [linked]);
+        var loaded = PlaylistStore.Load(path, Path.Combine(root, "missing.json"))[0];
+        Check(loaded.Tracks[0].Id == "dQw4w9WgXcQ" && loaded.SourceUrl == linked.SourceUrl && loaded.Tracks[0].IsNew, "linked playlist metadata round trip");
+        var next = new Track { Id = "abcdefghijk", Name = "New song", Artist = "Artist" };
+        Check(PlaylistStore.PrependMissingTracks(loaded, [next, loaded.Tracks[0]]) == 1 && ReferenceEquals(loaded.Tracks[0], next) && next.IsNew, "new online track is marked and prepended");
+        Check(PlaylistStore.PrependMissingTracks(loaded, [next]) == 0 && loaded.Tracks.Count == 2, "playlist refresh does not duplicate tracks");
+        PlaylistStore.Save(path, [new Playlist { Name = "Invalid source", SourceUrl = "https://example.invalid/playlist", Tracks = [] }]);
+        try { PlaylistStore.Load(path, Path.Combine(root, "missing.json")); throw new Exception("Invalid remote playlist source was accepted"); }
+        catch (JsonException) { Check(true, "linked playlist source URL is validated"); }
     }
 
     private static void TestStorage(string root)
@@ -120,6 +139,18 @@ internal static class Program
 
     private static void TestPlaybackAndControls(string root)
     {
+        var emptyDirectory = Path.Combine(root, "empty-playlist-delete");
+        using (var emptyForm = NewForm(emptyDirectory))
+        {
+            Call(emptyForm, "LoadLibrary");
+            var empty = Model("Playlist"); Property(empty, "Name", "Empty");
+            ((IList)Get(emptyForm, "playlists")).Add(empty);
+            Call(emptyForm, "DeletePlaylist", empty);
+            Check(((IList)Get(emptyForm, "playlists")).Count == 0 &&
+                JsonDocument.Parse(File.ReadAllText(Path.Combine(emptyDirectory, "stations.json"))).RootElement.GetProperty("Playlists").GetArrayLength() == 0,
+                "empty playlist can be deleted and saved");
+        }
+
         using var form = NewForm(Path.Combine(root, "playback"));
         Call(form, "LoadLibrary");
         var playlist = Model("Playlist");
@@ -128,6 +159,10 @@ internal static class Program
         tracks.Add(track);
         ((IList)Get(form, "playlists")).Add(playlist);
         Set(form, "currentPlaylist", playlist); Set(form, "currentTrack", track);
+        var settings = Get(form, "settings");
+        Property(settings, "Theme", 2);
+        Call(form, "ApplySettings");
+        Check(((Label)Get(form, "status")).BackColor == Color.White, "status bar follows light theme surface");
         Check(ReferenceEquals(Call(form, "GetNextTrack"), track), "single-track wrap");
         var request = ((CancellationTokenSource)Get(form, "playbackRequest")).Token;
         Call(form, "RemoveTrack", playlist, track);
@@ -157,12 +192,21 @@ internal static class Program
 
         _ = form.Handle;
         var player = (MediaPlayer)Get(form, "player");
+        Check(!player.Mute && player.Volume == ((TrackBar)Get(form, "volume")).Value, "audio player starts unmuted at the visible volume");
+        Call(form, "SetPlaybackVolume", 37);
+        Check(!player.Mute && player.Volume == 37 && ((TrackBar)Get(form, "volume")).Value == 37, "volume control updates the audio player");
         var invoked = false;
         Call(form, "PostPlayerEvent", player, (Action)(() => invoked = true));
         request = ((CancellationTokenSource)Get(form, "playbackRequest")).Token;
         Call(form, "Stop");
         Application.DoEvents();
         Check(request.IsCancellationRequested && !invoked, "stop invalidates queued playback callback");
+
+        Set(form, "isCrossfading", true);
+        Call(form, "PostPlayerEnded", player);
+        Application.DoEvents();
+        Check((bool)Get(form, "currentTrackEnded"), "outgoing track end is retained while crossfade stream loads");
+        Call(form, "Stop");
 
         var media = new Media((LibVLC)Get(form, "vlc"), new Uri(Path.Combine(root, "unused.wav")));
         Set(form, "media", media);

@@ -8,5 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\YouTubeRadio.csproj" />
+    <ProjectReference Include="..\shared\CatLuYNet.Core\CatLuYNet.Core.csproj" />
   </ItemGroup>
 </Project>
