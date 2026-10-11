@@ -29,10 +29,20 @@ dotnet run --project YouTubeRadio.csproj
 
 Ссылка с `v=...` добавляется как один ролик, даже если содержит параметры `list` и `index`.
 
+При сохранении библиотека и настройки заменяются атомарно; предыдущая версия остаётся в файле `.bak` рядом с основным JSON. Если библиотеку не удалось прочитать, её перезапись блокируется, а причина отображается в строке состояния.
+
+## Проверка исправлений
+
+```powershell
+dotnet run --project tests\RegressionTests.csproj
+```
+
+Проверки используют временную папку, скрытые экземпляры формы и локальные дочерние процессы. Они не изменяют личные плейлисты и не обращаются к YouTube. Проверяются сохранение и восстановимость данных, очередь, отмена, состояние паузы и кроссфейда, освобождение карточек, ссылки и формат времени. Живое воспроизведение YouTube проверяется отдельно.
+
 ## Сборка установщика
 
 ```powershell
-dotnet publish YouTubeRadio.csproj -c Release -r win-x64 --self-contained true -o publish\win-x64
+dotnet publish YouTubeRadio.csproj -c Release -r win-x64 --self-contained true -o publish\win-x64-1.1.2
 & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\CatLuYNet.iss
 ```
 

@@ -13,9 +13,9 @@ public sealed class PlaylistMainForm : Form
     private readonly Label status = new() { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(5, 3, 0, 0), ForeColor = Color.Silver, BackColor = Color.FromArgb(20, 20, 20), Text = "Готов", TextAlign = ContentAlignment.MiddleLeft, Tag = "muted" };
     private readonly Label clock = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, Padding = new Padding(0, 0, 5, 0), ForeColor = Color.Silver, Visible = false, Tag = "muted" };
     private readonly List<Playlist> playlists = [];
-    private readonly string statePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CatLuYNet", "stations.json");
-    private readonly string settingsPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CatLuYNet", "settings.json");
-    private readonly string oldStatePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "YouTubeRadio", "state.json");
+    private readonly string statePath;
+    private readonly string settingsPath;
+    private readonly string oldStatePath;
     private AppSettings settings = new();
     private readonly System.Windows.Forms.Timer infoTimer = new() { Interval = 500 };
     private readonly System.Windows.Forms.Timer visualizerTimer = new() { Interval = 70 };
@@ -43,13 +43,29 @@ public sealed class PlaylistMainForm : Form
     private Media? incomingMedia;
     private Track? incomingTrack;
     private Track? crossfadeAttemptedTrack;
-    private DateTime crossfadeStarted;
+    private readonly Stopwatch crossfadeElapsed = new();
     private bool isCrossfading;
     private Playlist? currentPlaylist;
     private Track? currentTrack;
+    private CancellationTokenSource playbackRequest = new();
+    private readonly CancellationTokenSource lifetime = new();
+    private bool closing;
+    private bool paused;
+    private bool libraryLoaded;
+    private readonly Font trackFont = new("Segoe UI", 10, FontStyle.Bold);
+    private readonly Font playlistFont = new("Segoe UI", 11, FontStyle.Bold);
+    private readonly Font editFont = new("Segoe UI", 14, FontStyle.Bold);
+    private readonly Font linkFont = new("Segoe UI", 8, FontStyle.Underline);
 
-    public PlaylistMainForm()
+    public PlaylistMainForm() : this(
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CatLuYNet"),
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "YouTubeRadio", "state.json")) { }
+
+    internal PlaylistMainForm(string dataDirectory, string legacyPath)
     {
+        statePath = Path.Combine(dataDirectory, "stations.json");
+        settingsPath = Path.Combine(dataDirectory, "settings.json");
+        oldStatePath = legacyPath;
         Core.Initialize();
         settings = LoadSettings();
         vlc = new LibVLC("--no-video", "--network-caching=1000");
@@ -70,7 +86,7 @@ public sealed class PlaylistMainForm : Form
         var pause = Button("❚❚", Color.FromArgb(42, 42, 42));
         var stop = Button("■", Color.FromArgb(42, 42, 42));
         var next = Button("▶▶", Color.FromArgb(42, 42, 42));
-        var header = new Label { Text = "▶  CatLu YNet 1.1.1", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
+        var header = new Label { Text = "▶  CatLu YNet 1.1.2", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = Color.FromArgb(20, 20, 20), TextAlign = ContentAlignment.MiddleLeft };
         settingsButton = Button("⚙", Color.FromArgb(42, 42, 42)); settingsButton.Dock = DockStyle.Fill;
         updateBadge = new Label { Text = "1", Visible = false, AutoSize = false, Width = 18, Height = 18, Left = 27, Top = 3, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(229, 9, 20), ForeColor = Color.White, Font = new Font("Segoe UI", 8, FontStyle.Bold) };
         var settingsSlot = new Panel { Dock = DockStyle.Right, Width = 48, BackColor = surfaceColor }; settingsSlot.Controls.Add(settingsButton); settingsSlot.Controls.Add(updateBadge);
@@ -121,13 +137,13 @@ public sealed class PlaylistMainForm : Form
         RegisterLocalized(save, "save"); RegisterLocalized(create, "newPlaylist"); RegisterLocalized(stationTitle, "stations"); RegisterLocalized(volumeTitle, "volume");
 
         Load += async (_, _) => { LoadLibrary(); await CheckForUpdateAsync(false); };
-        FormClosing += (_, _) => { SaveLibrary(); Stop(); player.Dispose(); vlc.Dispose(); };
+        FormClosing += (_, e) => { if (libraryLoaded && !SaveLibrary()) e.Cancel = true; };
         Resize += (_, _) => RenderPlaylists();
         save.Click += async (_, _) => await SaveLinkAsync();
         create.Click += (_, _) => CreatePlaylist();
         previous.Click += async (_, _) => await PreviousAsync();
         play.Click += async (_, _) => await PlayCurrentAsync();
-        pause.Click += (_, _) => player.Pause();
+        pause.Click += (_, _) => PausePlayback();
         stop.Click += (_, _) => { Stop(); status.Text = "Остановлено"; };
         next.Click += async (_, _) => await NextAsync();
         volume.Scroll += (_, _) => player.Volume = volume.Value;
@@ -139,6 +155,21 @@ public sealed class PlaylistMainForm : Form
         infoTimer.Start();
         visualizerTimer.Start();
         ApplySettings();
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing && !closing)
+        {
+            closing = true;
+            lifetime.Cancel();
+            Stop();
+            infoTimer.Dispose(); visualizerTimer.Dispose(); crossfadeTimer.Dispose();
+            player.Dispose(); vlc.Dispose(); http.Dispose();
+            playbackRequest.Dispose(); lifetime.Dispose();
+            trackFont.Dispose(); playlistFont.Dispose(); editFont.Dispose(); linkFont.Dispose();
+        }
+        base.Dispose(disposing);
     }
 
     private async Task SaveLinkAsync()
@@ -163,12 +194,13 @@ public sealed class PlaylistMainForm : Form
                 if (playlist.Tracks.All(item => item.Id != track.Id)) playlist.Tracks.Add(track);
                 playlist.Expanded = true;
             }
-            SaveLibrary();
+            if (closing || !SaveLibrary()) return;
             urlBox.Clear();
             status.Text = "Сохранено";
             RenderPlaylists();
         }
-        catch (Exception ex) { status.Text = $"Ошибка: {Short(ex.Message)}"; }
+        catch (OperationCanceledException) when (closing) { }
+        catch (Exception ex) { if (!closing) status.Text = $"Ошибка: {Short(ex.Message)}"; }
     }
 
     private void CreatePlaylist()
@@ -199,8 +231,9 @@ public sealed class PlaylistMainForm : Form
 
     private void RenderPlaylists(bool focusCurrent = false)
     {
+        if (closing) return;
         playlistHost.SuspendLayout();
-        playlistHost.Controls.Clear();
+        while (playlistHost.Controls.Count > 0) playlistHost.Controls[0].Dispose();
         Panel? activeRow = null;
         var width = Math.Max(420, playlistHost.ClientSize.Width - 30);
         foreach (var playlist in playlists)
@@ -208,8 +241,8 @@ public sealed class PlaylistMainForm : Form
             var rowHeights = playlist.Tracks.Select(track => TrackHeight(track, width)).ToList();
             var card = new Panel { Width = width, Height = playlist.Expanded ? 48 + rowHeights.Sum() : 48, BackColor = cardColor, Margin = new Padding(0, 0, 0, 5) };
             var headerRow = new Panel { Dock = DockStyle.Top, Height = 48, BackColor = surfaceColor };
-            var header = new Button { Text = $"{(playlist.Expanded ? "⌄" : "›")}   {playlist.Name}    {playlist.Tracks.Count}", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 }, BackColor = headerRow.BackColor, ForeColor = textColor, Font = new Font("Segoe UI", 11, FontStyle.Bold), Padding = new Padding(5, 0, 0, 0) };
-            var editPlaylist = new Button { Text = "✎", Dock = DockStyle.Right, Width = 52, FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 }, BackColor = headerRow.BackColor, ForeColor = textColor, Font = new Font("Segoe UI", 14, FontStyle.Bold) };
+            var header = new Button { Text = $"{(playlist.Expanded ? "⌄" : "›")}   {playlist.Name}    {playlist.Tracks.Count}", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 }, BackColor = headerRow.BackColor, ForeColor = textColor, Font = playlistFont, Padding = new Padding(5, 0, 0, 0) };
+            var editPlaylist = new Button { Text = "✎", Dock = DockStyle.Right, Width = 52, FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 }, BackColor = headerRow.BackColor, ForeColor = textColor, Font = editFont };
             header.Click += (_, _) => { playlist.Expanded = !playlist.Expanded; SaveLibrary(); RenderPlaylists(); };
             editPlaylist.Click += (_, _) => EditPlaylist(playlist);
             headerRow.Controls.Add(header);
@@ -228,7 +261,7 @@ public sealed class PlaylistMainForm : Form
             playlistHost.Controls.Add(card);
         }
         playlistHost.ResumeLayout();
-        if (focusCurrent && activeRow is not null) BeginInvoke(() => playlistHost.ScrollControlIntoView(activeRow));
+        if (focusCurrent && activeRow is not null && IsHandleCreated) BeginInvoke(() => { if (!closing && !activeRow.IsDisposed) playlistHost.ScrollControlIntoView(activeRow); });
     }
 
     private Panel AddTrackRow(Panel card, Playlist playlist, Track track, int top, int height)
@@ -236,12 +269,12 @@ public sealed class PlaylistMainForm : Form
         var active = ReferenceEquals(playlist, currentPlaylist) && ReferenceEquals(track, currentTrack);
         var activeColor = Color.FromArgb((cardColor.R + accentColor.R) / 2, (cardColor.G + accentColor.G) / 2, (cardColor.B + accentColor.B) / 2);
         var row = new Panel { Left = 0, Top = top, Width = card.Width, Height = height, BackColor = active ? activeColor : cardColor, BorderStyle = active ? BorderStyle.FixedSingle : BorderStyle.None, Cursor = Cursors.Hand };
-        var titleHeight = TextRenderer.MeasureText(track.Name, new Font("Segoe UI", 10, FontStyle.Bold), new Size(row.Width - 10, int.MaxValue), TextFormatFlags.WordBreak).Height;
-        var title = new Label { Text = track.Name, Left = 5, Top = 5, Width = row.Width - 10, Height = titleHeight, ForeColor = textColor, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
+        var titleHeight = TextRenderer.MeasureText(track.Name, trackFont, new Size(row.Width - 10, int.MaxValue), TextFormatFlags.WordBreak).Height;
+        var title = new Label { Text = track.Name, Left = 5, Top = 5, Width = row.Width - 10, Height = titleHeight, ForeColor = textColor, Font = trackFont };
         var artist = new Label { Text = track.Artist, Left = 5, Top = 5 + titleHeight, Width = row.Width - 10, Height = 18, ForeColor = mutedColor };
         Label? source = null;
-        if (settings.ShowYoutubeLinks) source = new Label { Text = $"https://www.youtube.com/watch?v={track.Id}", Left = 5, Top = artist.Bottom, Width = row.Width - 10, Height = 18, ForeColor = accentColor, Font = new Font("Segoe UI", 8, FontStyle.Underline), Cursor = Cursors.Hand };
-        EventHandler play = async (_, _) => { currentPlaylist = playlist; currentTrack = track; RenderPlaylists(true); await PlayCurrentAsync(); };
+        if (settings.ShowYoutubeLinks) source = new Label { Text = $"https://www.youtube.com/watch?v={track.Id}", Left = 5, Top = artist.Bottom, Width = row.Width - 10, Height = 18, ForeColor = accentColor, Font = linkFont, Cursor = Cursors.Hand };
+        EventHandler play = async (_, _) => { Stop(); currentPlaylist = playlist; currentTrack = track; await PlayCurrentAsync(); };
         row.Click += play; title.Click += play; artist.Click += play;
         if (source is not null) source.Click += (_, _) => Process.Start(new ProcessStartInfo(source.Text) { UseShellExecute = true });
         row.Controls.Add(title); row.Controls.Add(artist); if (source is not null) row.Controls.Add(source); card.Controls.Add(row);
@@ -250,7 +283,7 @@ public sealed class PlaylistMainForm : Form
 
     private int TrackHeight(Track track, int width)
     {
-        var measured = TextRenderer.MeasureText(track.Name, new Font("Segoe UI", 10, FontStyle.Bold), new Size(Math.Max(120, width - 10), int.MaxValue), TextFormatFlags.WordBreak);
+        var measured = TextRenderer.MeasureText(track.Name, trackFont, new Size(Math.Max(120, width - 10), int.MaxValue), TextFormatFlags.WordBreak);
         return Math.Max(44, measured.Height + 28 + (settings.ShowYoutubeLinks ? 18 : 0));
     }
 
@@ -312,11 +345,12 @@ public sealed class PlaylistMainForm : Form
             TextRenderer.DrawText(e.Graphics, track.Artist, Font, new Rectangle(e.Bounds.X + 42, e.Bounds.Bottom - 23, e.Bounds.Width - 52, 18), Color.Silver, TextFormatFlags.EndEllipsis);
         };
         rename.Click += (_, _) => { if (!string.IsNullOrWhiteSpace(name.Text)) { playlist.Name = name.Text.Trim(); dialog.Text = $"Плейлист: {playlist.Name}"; SaveLibrary(); RenderPlaylists(); } };
-        remove.Click += (_, _) => { if (tracks.SelectedItem is Track track) { playlist.Tracks.Remove(track); RefreshTracks(); SaveLibrary(); RenderPlaylists(); } };
+        remove.Click += (_, _) => { if (tracks.SelectedItem is Track track) { RemoveTrack(playlist, track); RefreshTracks(); SaveLibrary(); RenderPlaylists(); } };
         removePlaylist.Click += (_, _) =>
         {
             if (MessageBox.Show($"Удалить плейлист «{playlist.Name}»?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             playlists.Remove(playlist);
+            if (ReferenceEquals(currentPlaylist, playlist)) { Stop(); currentTrack = null; currentPlaylist = null; }
             SaveLibrary();
             RenderPlaylists();
             dialog.Close();
@@ -330,18 +364,32 @@ public sealed class PlaylistMainForm : Form
             {
                 add.Enabled = false;
                 var track = await ReadTrackAsync(link.Text);
+                if (closing || dialog.IsDisposed || !playlists.Contains(playlist)) return;
                 if (playlist.Tracks.All(item => item.Id != track.Id)) playlist.Tracks.Add(track);
                 link.Clear(); RefreshTracks(); SaveLibrary(); RenderPlaylists();
             }
-            catch (Exception ex) { MessageBox.Show(Short(ex.Message), "Ошибка добавления", MessageBoxButtons.OK, MessageBoxIcon.Error); }
-            finally { add.Enabled = true; }
+            catch (OperationCanceledException) when (closing) { }
+            catch (Exception ex) { if (!closing && !dialog.IsDisposed) MessageBox.Show(Short(ex.Message), "Ошибка добавления", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            finally { if (!add.IsDisposed) add.Enabled = true; }
         };
         close.Click += (_, _) => dialog.Close();
         RefreshTracks();
         dialog.ShowDialog(this);
     }
 
-    private static void MoveTrack(Playlist playlist, ListBox tracks, int offset, Action refresh)
+    private void RemoveTrack(Playlist playlist, Track track)
+    {
+        if (ReferenceEquals(currentPlaylist, playlist) &&
+            (ReferenceEquals(currentTrack, track) || ReferenceEquals(incomingTrack, track) ||
+             (isCrossfading && ReferenceEquals(GetNextTrack(), track))))
+        {
+            Stop();
+            if (ReferenceEquals(currentTrack, track)) currentTrack = null;
+        }
+        playlist.Tracks.Remove(track);
+    }
+
+    private void MoveTrack(Playlist playlist, ListBox tracks, int offset, Action refresh)
     {
         if (tracks.SelectedItem is not Track track) return;
         var from = playlist.Tracks.IndexOf(track);
@@ -351,33 +399,61 @@ public sealed class PlaylistMainForm : Form
         playlist.Tracks.Insert(to, track);
         refresh();
         tracks.SelectedItem = track;
+        SaveLibrary();
+        RenderPlaylists();
     }
 
     private async Task PlayCurrentAsync()
     {
+        if (closing) return;
+        if (paused)
+        {
+            paused = false;
+            player.SetPause(false);
+            incomingPlayer?.SetPause(false);
+            if (incomingPlayer is not null) crossfadeElapsed.Start();
+            crossfadeTimer.Start();
+            return;
+        }
+        if (player.IsPlaying) return;
         if (currentTrack is null)
         {
             currentPlaylist = playlists.FirstOrDefault(playlist => playlist.Tracks.Count > 0);
             currentTrack = currentPlaylist?.Tracks.FirstOrDefault();
         }
         if (currentTrack is null) return;
+        Stop();
+        var token = playbackRequest.Token;
         currentPlaylist!.Expanded = true;
         RenderPlaylists(true);
         crossfadeAttemptedTrack = null;
         try
         {
             status.Text = "Получение аудиопотока...";
-            var output = await RunYtDlpAsync("--no-playlist", "-f", "bestaudio/best", "-g", $"https://www.youtube.com/watch?v={currentTrack.Id}");
+            var output = await RunYtDlpAsync(token, "--no-playlist", "-f", "bestaudio/best", "-g", $"https://www.youtube.com/watch?v={currentTrack.Id}");
+            token.ThrowIfCancellationRequested();
             var url = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
             if (string.IsNullOrWhiteSpace(url)) throw new InvalidOperationException("yt-dlp не вернул поток.");
-            Stop();
             media = new Media(vlc, new Uri(url));
             if (settings.NormalizeAudio) media.AddOption(":audio-filter=compressor");
             player.Volume = volume.Value;
             if (!player.Play(media)) throw new InvalidOperationException("LibVLC не открыл поток.");
             crossfadeTimer.Start();
         }
-        catch (Exception ex) { status.Text = $"Ошибка: {Short(ex.Message)}"; }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception ex) { if (!closing && !token.IsCancellationRequested) status.Text = $"Ошибка: {Short(ex.Message)}"; }
+    }
+
+    private void PausePlayback()
+    {
+        if (paused) return;
+        if (media is null) { Stop(); status.Text = "Пауза"; return; }
+        paused = true;
+        player.SetPause(true);
+        incomingPlayer?.SetPause(true);
+        crossfadeElapsed.Stop();
+        crossfadeTimer.Stop();
+        status.Text = "Пауза";
     }
 
     private async Task NextAsync()
@@ -386,38 +462,52 @@ public sealed class PlaylistMainForm : Form
         Stop();
         currentTrack = GetNextTrack();
         RenderPlaylists(true);
+        if (currentTrack is null) return;
         await PlayCurrentAsync();
     }
 
     private async Task PreviousAsync()
     {
-        if (currentPlaylist is null || currentTrack is null) return;
+        if (currentPlaylist is null || currentTrack is null || currentPlaylist.Tracks.Count == 0) return;
         Stop();
         var index = currentPlaylist.Tracks.IndexOf(currentTrack);
         currentTrack = currentPlaylist.Tracks[(index - 1 + currentPlaylist.Tracks.Count) % currentPlaylist.Tracks.Count];
         await PlayCurrentAsync();
     }
 
-    private Track GetNextTrack()
+    private Track? GetNextTrack()
     {
+        if (currentPlaylist is null || currentPlaylist.Tracks.Count == 0) return null;
         var index = currentPlaylist!.Tracks.IndexOf(currentTrack!);
         return currentPlaylist.Tracks[(index + 1) % currentPlaylist.Tracks.Count];
     }
 
     private void AttachPlayerEvents(MediaPlayer target)
     {
-        target.Playing += (_, _) => { if (ReferenceEquals(target, player)) BeginInvoke(() => status.Text = $"Играет: {currentTrack?.Name}"); };
-        target.Paused += (_, _) => { if (ReferenceEquals(target, player)) BeginInvoke(() => status.Text = "Пауза"); };
-        target.EncounteredError += (_, _) => { if (ReferenceEquals(target, player)) BeginInvoke(() => status.Text = "Ошибка аудиопотока"); };
-        target.EndReached += (_, _) => { if (ReferenceEquals(target, player) && !isCrossfading) BeginInvoke(async () => await NextAsync()); };
+        target.Playing += (_, _) => PostPlayerEvent(target, () => status.Text = paused ? "Пауза" : $"Играет: {currentTrack?.Name}");
+        target.Paused += (_, _) => PostPlayerEvent(target, () => status.Text = "Пауза");
+        target.EncounteredError += (_, _) => PostPlayerEvent(target, () => status.Text = "Ошибка аудиопотока");
+        target.EndReached += (_, _) => PostPlayerEvent(target, async () => { if (!isCrossfading && !paused && player.State == VLCState.Ended) await NextAsync(); });
+    }
+
+    private void PostPlayerEvent(MediaPlayer target, Action action)
+    {
+        if (closing || !IsHandleCreated || !ReferenceEquals(target, player)) return;
+        var request = playbackRequest;
+        try
+        {
+            BeginInvoke(() => { if (!closing && ReferenceEquals(request, playbackRequest) && ReferenceEquals(target, player)) action(); });
+        }
+        catch (InvalidOperationException) when (closing || !IsHandleCreated) { }
     }
 
     private async Task HandleCrossfadeAsync()
     {
+        if (closing || paused) return;
         if (isCrossfading)
         {
             if (incomingPlayer is null) return;
-            var progress = Math.Min(1d, (DateTime.UtcNow - crossfadeStarted).TotalMilliseconds / 5000d);
+            var progress = Math.Min(1d, crossfadeElapsed.Elapsed.TotalMilliseconds / 5000d);
             player.Volume = (int)Math.Round(volume.Value * (1d - progress));
             incomingPlayer.Volume = (int)Math.Round(volume.Value * progress);
             if (progress >= 1d) CompleteCrossfade();
@@ -430,12 +520,15 @@ public sealed class PlaylistMainForm : Form
 
     private async Task StartCrossfadeAsync()
     {
+        var token = playbackRequest.Token;
         isCrossfading = true;
         crossfadeAttemptedTrack = currentTrack;
         try
         {
             var next = GetNextTrack();
-            var output = await RunYtDlpAsync("--no-playlist", "-f", "bestaudio/best", "-g", $"https://www.youtube.com/watch?v={next.Id}");
+            if (next is null) { isCrossfading = false; return; }
+            var output = await RunYtDlpAsync(token, "--no-playlist", "-f", "bestaudio/best", "-g", $"https://www.youtube.com/watch?v={next.Id}");
+            token.ThrowIfCancellationRequested();
             var url = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
             if (string.IsNullOrWhiteSpace(url)) throw new InvalidOperationException("yt-dlp не вернул следующий поток.");
             incomingMedia = new Media(vlc, new Uri(url));
@@ -444,23 +537,27 @@ public sealed class PlaylistMainForm : Form
             AttachPlayerEvents(incomingPlayer);
             if (!incomingPlayer.Play(incomingMedia)) throw new InvalidOperationException("LibVLC не открыл следующий поток.");
             incomingTrack = next;
-            crossfadeStarted = DateTime.UtcNow;
+            crossfadeElapsed.Restart();
+            if (paused) { incomingPlayer.SetPause(true); crossfadeElapsed.Stop(); }
         }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
         catch (Exception ex)
         {
+            if (closing || token.IsCancellationRequested) return;
             incomingPlayer?.Dispose(); incomingPlayer = null;
             incomingMedia?.Dispose(); incomingMedia = null;
             isCrossfading = false;
             status.Text = $"Кроссфейд: {Short(ex.Message)}";
+            if (!paused && player.State == VLCState.Ended) await NextAsync();
         }
     }
 
     private void CompleteCrossfade()
     {
         var outgoingPlayer = player;
+        player = incomingPlayer!;
         outgoingPlayer.Stop();
         media?.Dispose();
-        player = incomingPlayer!;
         media = incomingMedia;
         currentTrack = incomingTrack;
         currentPlaylist!.Expanded = true;
@@ -475,22 +572,27 @@ public sealed class PlaylistMainForm : Form
 
     private void Stop()
     {
+        playbackRequest.Cancel();
+        paused = false;
+        crossfadeElapsed.Reset();
         crossfadeTimer.Stop();
         isCrossfading = false;
         incomingPlayer?.Stop(); incomingPlayer?.Dispose(); incomingPlayer = null;
         incomingMedia?.Dispose(); incomingMedia = null; incomingTrack = null;
         player.Stop(); media?.Dispose(); media = null;
+        playbackRequest.Dispose();
+        playbackRequest = new CancellationTokenSource();
     }
 
     private async Task<Track> ReadTrackAsync(string url)
     {
-        using var document = JsonDocument.Parse(await RunYtDlpAsync("--no-playlist", "--dump-single-json", CleanVideoUrl(url)));
+        using var document = JsonDocument.Parse(await RunYtDlpAsync(lifetime.Token, "--no-playlist", "--dump-single-json", CleanVideoUrl(url)));
         return ToTrack(document.RootElement);
     }
 
     private async Task<List<Track>> ReadPlaylistAsync(string url)
     {
-        var output = await RunYtDlpAsync("--flat-playlist", "--dump-json", url);
+        var output = await RunYtDlpAsync(lifetime.Token, "--flat-playlist", "--dump-json", url.Trim());
         return output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(line => { using var document = JsonDocument.Parse(line); return ToTrack(document.RootElement); }).Where(track => !string.IsNullOrWhiteSpace(track.Id)).ToList();
     }
 
@@ -498,14 +600,26 @@ public sealed class PlaylistMainForm : Form
     private static bool IsYouTubeUrl(string value, out bool playlist)
     {
         playlist = false;
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || !(uri.Host.Contains("youtube", StringComparison.OrdinalIgnoreCase) || uri.Host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase))) return false;
-        playlist = GetVideoId(uri) is null && GetQueryValue(uri, "list") is not null;
-        return true;
+        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) ||
+            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp) ||
+            !string.IsNullOrEmpty(uri.UserInfo) ||
+            !(uri.Host.Equals("youtube.com", StringComparison.OrdinalIgnoreCase) ||
+              uri.Host.EndsWith(".youtube.com", StringComparison.OrdinalIgnoreCase) ||
+              uri.Host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase))) return false;
+        var id = GetVideoId(uri);
+        if (id is not null) return IsVideoId(id);
+        var list = GetQueryValue(uri, "list");
+        playlist = (uri.AbsolutePath.TrimEnd('/').Equals("/playlist", StringComparison.OrdinalIgnoreCase) ||
+                    uri.AbsolutePath.TrimEnd('/').Equals("/watch", StringComparison.OrdinalIgnoreCase)) &&
+            list is { Length: > 0 } && list.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+        return playlist;
     }
+
+    private static bool IsVideoId(string? id) => id is { Length: 11 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
 
     private static string CleanVideoUrl(string value)
     {
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)) return value;
+        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)) return value;
         var id = GetVideoId(uri);
         return string.IsNullOrWhiteSpace(id) ? value : $"https://www.youtube.com/watch?v={Uri.EscapeDataString(id)}";
     }
@@ -516,11 +630,11 @@ public sealed class PlaylistMainForm : Form
         var queryId = GetQueryValue(uri, "v");
         if (!string.IsNullOrWhiteSpace(queryId)) return queryId;
         var parts = uri.AbsolutePath.Trim('/').Split('/');
-        return parts.Length == 2 && (parts[0].Equals("shorts", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("embed", StringComparison.OrdinalIgnoreCase)) ? parts[1] : null;
+        return parts.Length == 2 && (parts[0].Equals("shorts", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("embed", StringComparison.OrdinalIgnoreCase) || parts[0].Equals("live", StringComparison.OrdinalIgnoreCase)) ? parts[1] : null;
     }
 
     private static string? GetQueryValue(Uri uri, string name) => uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries).Select(part => part.Split('=', 2)).FirstOrDefault(part => part.Length == 2 && part[0].Equals(name, StringComparison.OrdinalIgnoreCase)) is { } pair ? Uri.UnescapeDataString(pair[1]) : null;
-    private static async Task<string> RunYtDlpAsync(params string[] arguments)
+    private static async Task<string> RunYtDlpAsync(CancellationToken token, params string[] arguments)
     {
         var file = Path.Combine(AppContext.BaseDirectory, "tools", "yt-dlp.exe");
         var start = new ProcessStartInfo(file) { WorkingDirectory = AppContext.BaseDirectory, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
@@ -531,16 +645,42 @@ public sealed class PlaylistMainForm : Form
         start.ArgumentList.Add("--ignore-config");
         start.ArgumentList.Add("--no-cache-dir");
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("yt-dlp не запустился.");
-        var output = await process.StandardOutput.ReadToEndAsync(); var error = await process.StandardError.ReadToEndAsync(); await process.WaitForExitAsync();
-        if (process.ExitCode != 0)
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeout.CancelAfter(TimeSpan.FromMinutes(5));
+        (string Output, string Error, int ExitCode) result;
+        try { result = await ReadProcessAsync(start, timeout.Token).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            throw new TimeoutException("yt-dlp не завершил запрос за 5 минут.");
+        }
+        if (result.ExitCode != 0)
         {
             var log = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CatLuYNet", "yt-dlp-error.log");
             Directory.CreateDirectory(Path.GetDirectoryName(log)!);
-            File.WriteAllText(log, error);
-            throw new InvalidOperationException(error.Trim());
+            File.WriteAllText(log, result.Error);
+            throw new InvalidOperationException(result.Error.Trim());
         }
-        return output;
+        return result.Output;
+    }
+
+    private static async Task<(string Output, string Error, int ExitCode)> ReadProcessAsync(ProcessStartInfo start, CancellationToken token)
+    {
+        token.ThrowIfCancellationRequested();
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Не удалось запустить процесс.");
+        var output = process.StandardOutput.ReadToEndAsync();
+        var error = process.StandardError.ReadToEndAsync();
+        try { await process.WaitForExitAsync(token).ConfigureAwait(false); }
+        catch (OperationCanceledException)
+        {
+            try { if (!process.HasExited) process.Kill(entireProcessTree: true); }
+            catch (InvalidOperationException) { }
+            await process.WaitForExitAsync().ConfigureAwait(false);
+            await Task.WhenAll(output, error).ConfigureAwait(false);
+            throw;
+        }
+        await Task.WhenAll(output, error).ConfigureAwait(false);
+        token.ThrowIfCancellationRequested();
+        return (output.Result, error.Result, process.ExitCode);
     }
 
     private async Task CheckForUpdateAsync(bool showResult)
@@ -551,9 +691,10 @@ public sealed class PlaylistMainForm : Form
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/Maksimasz/CatLuYNet/releases/latest");
             request.Headers.UserAgent.ParseAdd("CatLuYNet/1.0");
-            using var response = await http.SendAsync(request);
+            using var response = await http.SendAsync(request, lifetime.Token);
             response.EnsureSuccessStatusCode();
             using var release = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            if (closing) return;
             var tag = release.RootElement.GetProperty("tag_name").GetString()?.TrimStart('v') ?? "0.0.0";
             var newest = Version.Parse(tag);
             var current = typeof(PlaylistMainForm).Assembly.GetName().Version ?? new Version(0, 0);
@@ -567,7 +708,7 @@ public sealed class PlaylistMainForm : Form
         }
         catch (Exception ex)
         {
-            if (showResult) MessageBox.Show($"{T("updateError")}: {Short(ex.Message)}", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            if (showResult && !closing) MessageBox.Show($"{T("updateError")}: {Short(ex.Message)}", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally { checkingUpdate = false; }
     }
@@ -597,7 +738,7 @@ public sealed class PlaylistMainForm : Form
         save.Click += (_, _) =>
         {
             settings.Theme = theme.SelectedIndex; settings.Language = language.SelectedIndex; settings.ShowClock = showClock.Checked; settings.ShowTrackInfo = showInfo.Checked; settings.NormalizeAudio = normalize.Checked; settings.Crossfade = crossfade.Checked; settings.MusicLights = musicLights.Checked; settings.ShowYoutubeLinks = youtubeLinks.Checked;
-            SaveSettings(); ApplySettings(); dialog.Close();
+            if (SaveSettings()) { ApplySettings(); dialog.Close(); }
         };
         checkUpdates.Click += async (_, _) => await CheckForUpdateAsync(true);
         dialog.ShowDialog(this);
@@ -643,7 +784,12 @@ public sealed class PlaylistMainForm : Form
         clock.Text = DateTime.Now.ToString("HH:mm");
         if (settings.ShowTrackInfo && player.IsPlaying && currentTrack is not null) status.Text = $"{T("playing")}: {FormatTime(player.Time)} / {FormatTime(player.Length)} · {currentTrack.Artist}";
     }
-    private static string FormatTime(long milliseconds) => milliseconds <= 0 ? "--:--" : TimeSpan.FromMilliseconds(milliseconds).ToString(@"m\:ss");
+    private static string FormatTime(long milliseconds)
+    {
+        if (milliseconds <= 0) return "--:--";
+        var time = TimeSpan.FromMilliseconds(milliseconds);
+        return time.TotalHours >= 1 ? $"{(long)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}" : time.ToString(@"m\:ss");
+    }
     private static bool SystemThemeIsDark() => Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
 
     private void DrawVisualizer(Graphics graphics, Rectangle area)
@@ -673,10 +819,14 @@ public sealed class PlaylistMainForm : Form
         try { return File.Exists(settingsPath) ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(settingsPath)) ?? new AppSettings() : new AppSettings(); }
         catch (JsonException) { return new AppSettings(); }
     }
-    private void SaveSettings()
+    private bool SaveSettings()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
-        File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings));
+        try { WriteAtomically(settingsPath, JsonSerializer.Serialize(settings)); return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            status.Text = $"Настройки не сохранены: {Short(ex.Message)}";
+            return false;
+        }
     }
 
     private void LoadLibrary()
@@ -684,19 +834,55 @@ public sealed class PlaylistMainForm : Form
         try
         {
             var path = File.Exists(statePath) ? statePath : oldStatePath;
-            if (!File.Exists(path)) return;
+            if (!File.Exists(path)) { libraryLoaded = true; return; }
             var json = File.ReadAllText(path);
-            if (json.TrimStart().StartsWith('{')) playlists.AddRange(JsonSerializer.Deserialize<Library>(json)?.Playlists ?? []);
-            else playlists.Add(new Playlist { Name = "Сохранённые", Expanded = true, Tracks = JsonSerializer.Deserialize<List<Track>>(json) ?? [] });
+            var loaded = json.TrimStart().StartsWith('{')
+                ? JsonSerializer.Deserialize<Library>(json)?.Playlists
+                : [new Playlist { Name = "Сохранённые", Expanded = true, Tracks = JsonSerializer.Deserialize<List<Track>>(json)! }];
+            if (loaded is null || loaded.Any(p => p is null || p.Name is null || p.Tracks is null ||
+                p.Tracks.Any(t => t is null || !IsVideoId(t.Id) || t.Name is null || t.Artist is null)))
+                throw new JsonException("Некорректная структура библиотеки.");
+            playlists.AddRange(loaded);
+            libraryLoaded = true;
         }
-        catch (JsonException) { }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            libraryLoaded = false;
+            status.Text = $"Библиотека не прочитана; сохранение отключено: {Short(ex.Message)}";
+        }
         RenderPlaylists();
     }
 
-    private void SaveLibrary()
+    private bool SaveLibrary()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(statePath)!);
-        File.WriteAllText(statePath, JsonSerializer.Serialize(new Library { Playlists = playlists }));
+        if (!libraryLoaded)
+        {
+            status.Text = "Сохранение отключено: исходная библиотека не была прочитана. Файл сохранён без изменений.";
+            return false;
+        }
+        try { WriteAtomically(statePath, JsonSerializer.Serialize(new Library { Playlists = playlists })); return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            status.Text = $"Библиотека не сохранена: {Short(ex.Message)}";
+            return false;
+        }
+    }
+
+    private static void WriteAtomically(string path, string json)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        try
+        {
+            using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                using (var writer = new StreamWriter(file, leaveOpen: true)) { writer.Write(json); writer.Flush(); }
+                file.Flush(flushToDisk: true);
+            }
+            if (File.Exists(path)) File.Replace(temporary, path, path + ".bak");
+            else File.Move(temporary, path);
+        }
+        finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
     private static Button Button(string text, Color color) => new() { Text = text, AutoSize = true, FlatStyle = FlatStyle.Flat, FlatAppearance = { BorderSize = 0 }, BackColor = color, ForeColor = Color.White, Font = new Font("Segoe UI", 10, FontStyle.Bold), Padding = new Padding(5, 4, 5, 4), UseVisualStyleBackColor = false, Tag = color.R > 180 && color.G < 60 ? "accent" : "button" };

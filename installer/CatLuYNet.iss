@@ -1,5 +1,5 @@
 #define AppName "CatLu YNet"
-#define AppVersion "1.1.1"
+#define AppVersion "1.1.2"
 #define AppPublisher "CatLu"
 #define AppExeName "YouTubeRadio.exe"
 
@@ -12,7 +12,7 @@ DefaultDirName={autopf}\CatLu YNet
 DefaultGroupName=CatLu YNet
 DisableProgramGroupPage=yes
 OutputDir=Output
-OutputBaseFilename=CatLuYNet-1.1.1-Setup
+OutputBaseFilename=CatLuYNet-{#AppVersion}-Setup
 SetupIconFile=..\Assets\CatLuNet2.ico
 Compression=lzma2
 SolidCompression=yes
@@ -28,7 +28,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "Создать ярлык на рабочем столе"; GroupDescription: "Дополнительно:"; Flags: unchecked
 
 [Files]
-Source: "..\publish\win-x64\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\publish\win-x64-{#AppVersion}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{autoprograms}\CatLu YNet"; Filename: "{app}\{#AppExeName}"
