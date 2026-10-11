@@ -34,6 +34,7 @@ internal static class Program
         try
         {
             TestUrlsAndTime();
+            TestReleaseAssets();
             TestSharedCore(directory);
             TestStorage(directory);
             TestPlaybackAndControls(directory);
@@ -83,6 +84,20 @@ internal static class Program
         Check((string)Call(null, "FormatTime", 3660000L)! == "1:01:00", "hours");
         Check((string)Call(null, "FormatTime", 90061000L)! == "25:01:01", "more than one day");
         Check((string)Call(null, "FormatTime", 61000L)! == "1:01", "minutes");
+    }
+
+    private static void TestReleaseAssets()
+    {
+        using var release = JsonDocument.Parse("""{"assets":[{"name":"CatLuYNet-1.1.3-win-x64.zip","browser_download_url":"https://example.invalid/app.zip"}]}""");
+        var portable = ((string Url, bool Installer)?)Call(null, "FindUpdateAsset", release.RootElement);
+        Check(portable is { Installer: false, Url: "https://example.invalid/app.zip" }, "update checker recognizes portable ZIP releases");
+
+        using var withInstaller = JsonDocument.Parse("""{"assets":[{"name":"CatLuYNet-1.1.3-win-x64.zip","browser_download_url":"https://example.invalid/app.zip"},{"name":"CatLuYNet-1.1.3-Setup.exe","browser_download_url":"https://example.invalid/setup.exe"}]}""");
+        var installer = ((string Url, bool Installer)?)Call(null, "FindUpdateAsset", withInstaller.RootElement);
+        Check(installer is { Installer: true, Url: "https://example.invalid/setup.exe" }, "update checker prefers installer when available");
+
+        using var empty = JsonDocument.Parse("""{"assets":[]}""");
+        Check(Call(null, "FindUpdateAsset", empty.RootElement) is null, "update checker handles releases without assets");
     }
 
     private static void TestSharedCore(string root)

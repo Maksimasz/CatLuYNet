@@ -37,6 +37,7 @@ public sealed class PlaylistMainForm : Form
     private bool restoringMiniPlayer;
     private Label? updateBadge;
     private string? updateUrl;
+    private bool updateIsInstaller;
     private bool checkingUpdate;
     private readonly Dictionary<Control, string> localizedControls = [];
     private Color pageColor = Color.FromArgb(15, 15, 15);
@@ -939,9 +940,14 @@ public sealed class PlaylistMainForm : Form
             var current = typeof(PlaylistMainForm).Assembly.GetName().Version ?? new Version(0, 0);
             if (newest > current)
             {
-                updateUrl = release.RootElement.GetProperty("assets").EnumerateArray().FirstOrDefault(asset => asset.GetProperty("name").GetString()?.EndsWith("-Setup.exe", StringComparison.OrdinalIgnoreCase) == true).GetProperty("browser_download_url").GetString();
-                if (!string.IsNullOrWhiteSpace(updateUrl)) updateBadge!.Visible = true;
-                if (showResult && MessageBox.Show($"Доступна версия {newest}. Скачать установщик?", T("updates"), MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes) Process.Start(new ProcessStartInfo(updateUrl!) { UseShellExecute = true });
+                var asset = FindUpdateAsset(release.RootElement);
+                updateUrl = asset?.Url;
+                updateIsInstaller = asset?.Installer == true;
+                updateBadge!.Visible = updateUrl is not null;
+                if (showResult && updateUrl is not null && MessageBox.Show($"Доступна версия {newest}. {(updateIsInstaller ? "Скачать установщик?" : "Скачать portable ZIP? Его нужно распаковать вручную.")}", T("updates"), MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
+                    Process.Start(new ProcessStartInfo(updateUrl) { UseShellExecute = true });
+                else if (showResult && updateUrl is null)
+                    MessageBox.Show($"Версия {newest} найдена, но релиз не содержит установщика или portable ZIP.", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             else if (showResult) MessageBox.Show(T("upToDate"), T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -950,6 +956,17 @@ public sealed class PlaylistMainForm : Form
             if (showResult && !closing) MessageBox.Show($"{T("updateError")}: {Short(ex.Message)}", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
         finally { checkingUpdate = false; }
+    }
+
+    private static (string Url, bool Installer)? FindUpdateAsset(JsonElement release)
+    {
+        if (!release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) return null;
+        var asset = assets.EnumerateArray().FirstOrDefault(item => item.TryGetProperty("name", out var name) && name.GetString()?.EndsWith("-Setup.exe", StringComparison.OrdinalIgnoreCase) == true);
+        var installer = asset.ValueKind == JsonValueKind.Object;
+        if (!installer) asset = assets.EnumerateArray().FirstOrDefault(item => item.TryGetProperty("name", out var name) && name.GetString()?.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase) == true);
+        return asset.ValueKind == JsonValueKind.Object && asset.TryGetProperty("browser_download_url", out var url) && url.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(url.GetString())
+            ? (url.GetString()!, installer)
+            : null;
     }
 
     private void ShowSettings()

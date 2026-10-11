@@ -42,11 +42,12 @@ dotnet run --project tests\RegressionTests.csproj
 ## Сборка установщика
 
 ```powershell
-dotnet publish YouTubeRadio.csproj -c Release -r win-x64 --self-contained true -o publish\win-x64-1.1.3
+dotnet publish YouTubeRadio.csproj -c Release -r win-x64 --self-contained true -o publish\win-x64-1.1.4
 & 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' installer\CatLuYNet.iss
 ```
 
 Готовый установщик появится в `installer\Output`.
+Публикация тега вида `v1.1.4` автоматически собирает установщик и portable ZIP в GitHub Actions и прикрепляет их к релизу.
 
 ## Лицензия
 
