@@ -1,0 +1,10 @@
+embedder: mock
+editor_files:
+  agents_md: true
+commit_limit: 200
+distill:
+  commands:
+    enabled: false
+hooks:
+  read_skeleton: false
+  search_digest: false

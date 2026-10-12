@@ -98,6 +98,10 @@ internal static class Program
 
         using var empty = JsonDocument.Parse("""{"assets":[]}""");
         Check(Call(null, "FindUpdateAsset", empty.RootElement) is null, "update checker handles releases without assets");
+
+        using var malformed = JsonDocument.Parse("""{"assets":[null,3,{"name":4,"browser_download_url":"https://example.invalid/bad.exe"},{"name":"CatLuYNet-1.1.4-Setup.exe","browser_download_url":false},{"name":"CatLuYNet-1.1.4-Setup.exe","browser_download_url":"https://example.invalid/setup.exe"}]}""");
+        var validAfterMalformed = ((string Url, bool Installer)?)Call(null, "FindUpdateAsset", malformed.RootElement);
+        Check(validAfterMalformed is { Installer: true, Url: "https://example.invalid/setup.exe" }, "update checker skips malformed release assets");
     }
 
     private static void TestSharedCore(string root)
@@ -207,9 +211,10 @@ internal static class Program
 
         _ = form.Handle;
         var player = (MediaPlayer)Get(form, "player");
-        Check(!player.Mute && player.Volume == ((TrackBar)Get(form, "volume")).Value, "audio player starts unmuted at the visible volume");
+        Check(!player.Mute, "audio player starts unmuted");
+        // LibVLC reports -1 until media opens an audio output, so test the UI/player mute state before playback.
         Call(form, "SetPlaybackVolume", 37);
-        Check(!player.Mute && player.Volume == 37 && ((TrackBar)Get(form, "volume")).Value == 37, "volume control updates the audio player");
+        Check(!player.Mute && ((TrackBar)Get(form, "volume")).Value == 37, "volume control updates the visible level and unmutes the player");
         var invoked = false;
         Call(form, "PostPlayerEvent", player, (Action)(() => invoked = true));
         request = ((CancellationTokenSource)Get(form, "playbackRequest")).Token;

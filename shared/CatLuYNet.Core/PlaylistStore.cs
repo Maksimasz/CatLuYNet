@@ -19,10 +19,17 @@ public static class PlaylistStore
             var tracks = JsonSerializer.Deserialize<List<Track>>(json);
             loaded = tracks is null ? null : [new Playlist { Name = "Сохранённые", Expanded = true, Tracks = tracks }];
         }
-        if (loaded is null || loaded.Any(p => p is null || p.Name is null || p.Tracks is null || p.Tracks.Any(t => t is null || !YouTubeUrl.IsVideoId(t.Id) || t.Name is null || t.Artist is null) || !IsValidSourceUrl(p.SourceUrl)))
+        if (loaded is null || loaded.Any(p => !IsValidPlaylist(p)))
             throw new JsonException("Некорректная структура библиотеки.");
         return loaded;
     }
+
+    private static bool IsValidPlaylist(Playlist? playlist) => playlist is not null &&
+        playlist.Name is not null && playlist.Tracks is not null &&
+        playlist.Tracks.All(IsValidTrack) && IsValidSourceUrl(playlist.SourceUrl);
+
+    private static bool IsValidTrack(Track? track) => track is not null &&
+        YouTubeUrl.IsVideoId(track.Id) && track.Name is not null && track.Artist is not null;
 
     public static int PrependMissingTracks(Playlist playlist, IEnumerable<Track> latestTracks)
     {

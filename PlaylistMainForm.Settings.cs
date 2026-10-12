@@ -1,0 +1,198 @@
+using System.Globalization;
+using System.Text.Json;
+using CatLuYNet.Core;
+using LibVLCSharp.Shared;
+
+namespace YouTubeRadio;
+
+public sealed partial class PlaylistMainForm
+{
+    private void ShowSettings()
+    {
+        using var dialog = new Form { Text = T("settings"), Size = new Size(430, 540), StartPosition = FormStartPosition.CenterParent, BackColor = surfaceColor, ForeColor = textColor, Padding = new Padding(5), MinimizeBox = false, MaximizeBox = false };
+        var theme = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+        theme.Items.AddRange(["Системная", "Тёмная", "Светлая", "Apple", "YouTube", "Spotify", "Netflix"]); theme.SelectedIndex = Math.Clamp(settings.Theme, 0, 6);
+        var language = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+        language.Items.AddRange(["Системный", "Русский", "English", "עברית", "Lietuvių"]); language.SelectedIndex = Math.Clamp(settings.Language, 0, 4);
+        var showClock = new CheckBox { Text = T("clock"), Checked = settings.ShowClock, AutoSize = true };
+        var showInfo = new CheckBox { Text = T("trackInfo"), Checked = settings.ShowTrackInfo, AutoSize = true };
+        var normalize = new CheckBox { Text = T("normalize"), Checked = settings.NormalizeAudio, AutoSize = true };
+        var crossfade = new CheckBox { Text = T("crossfade"), Checked = settings.Crossfade, AutoSize = true };
+        var musicLights = new CheckBox { Text = T("musicLights"), Checked = settings.MusicLights, AutoSize = true };
+        var youtubeLinks = new CheckBox { Text = T("youtubeLinks"), Checked = settings.ShowYoutubeLinks, AutoSize = true };
+        var checkUpdates = Button(T("checkUpdates"), cardColor); checkUpdates.AutoSize = false; checkUpdates.Size = new Size(235, 32); checkUpdates.Anchor = AnchorStyles.Top | AnchorStyles.Left; checkUpdates.Margin = Padding.Empty; checkUpdates.TextAlign = ContentAlignment.MiddleCenter;
+        var save = Button(T("save"), accentColor); save.AutoSize = false; save.Size = new Size(120, 32); save.Anchor = AnchorStyles.Top | AnchorStyles.Right; save.Margin = Padding.Empty; save.TextAlign = ContentAlignment.MiddleCenter;
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 10, Padding = new Padding(5) };
+        grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        for (var i = 0; i < 10; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        grid.Controls.Add(new Label { Text = T("theme"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0); grid.Controls.Add(theme, 1, 0);
+        grid.Controls.Add(new Label { Text = T("language"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1); grid.Controls.Add(language, 1, 1);
+        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(musicLights, 1, 6); grid.Controls.Add(youtubeLinks, 1, 7); grid.Controls.Add(checkUpdates, 1, 8); grid.Controls.Add(save, 1, 9);
+        dialog.Controls.Add(grid);
+        save.Click += (_, _) =>
+        {
+            settings.Theme = theme.SelectedIndex; settings.Language = language.SelectedIndex; settings.ShowClock = showClock.Checked; settings.ShowTrackInfo = showInfo.Checked; settings.NormalizeAudio = normalize.Checked; settings.Crossfade = crossfade.Checked; settings.MusicLights = musicLights.Checked; settings.ShowYoutubeLinks = youtubeLinks.Checked;
+            if (SaveSettings()) { ApplySettings(); dialog.Close(); }
+        };
+        checkUpdates.Click += async (_, _) => await CheckForUpdateAsync(true);
+        dialog.ShowDialog(this);
+    }
+
+    private void ApplySettings()
+    {
+        (pageColor, surfaceColor, cardColor, accentColor, textColor, mutedColor) = settings.Theme switch
+        {
+            2 => (Color.FromArgb(245, 245, 247), Color.White, Color.FromArgb(232, 232, 235), Color.FromArgb(0, 122, 255), Color.FromArgb(20, 20, 20), Color.FromArgb(90, 90, 95)),
+            3 => (Color.FromArgb(242, 242, 247), Color.White, Color.FromArgb(229, 229, 234), Color.FromArgb(0, 122, 255), Color.FromArgb(20, 20, 20), Color.FromArgb(100, 100, 105)),
+            4 => (Color.FromArgb(15, 15, 15), Color.FromArgb(30, 30, 30), Color.FromArgb(42, 42, 42), Color.FromArgb(255, 0, 0), Color.White, Color.Silver),
+            5 => (Color.FromArgb(18, 18, 18), Color.FromArgb(30, 30, 30), Color.FromArgb(45, 45, 45), Color.FromArgb(29, 185, 84), Color.White, Color.Silver),
+            6 => (Color.FromArgb(14, 14, 14), Color.FromArgb(25, 25, 25), Color.FromArgb(45, 45, 45), Color.FromArgb(229, 9, 20), Color.White, Color.Silver),
+            1 => (Color.FromArgb(32, 32, 32), Color.FromArgb(45, 45, 45), Color.FromArgb(60, 60, 60), Color.FromArgb(0, 120, 215), Color.White, Color.Silver),
+            _ when SystemThemeIsDark() => (Color.FromArgb(32, 32, 32), Color.FromArgb(45, 45, 45), Color.FromArgb(60, 60, 60), Color.FromArgb(0, 120, 215), Color.White, Color.Silver),
+            _ => (Color.FromArgb(245, 245, 245), Color.White, Color.FromArgb(230, 230, 230), Color.FromArgb(0, 120, 215), Color.FromArgb(20, 20, 20), Color.FromArgb(90, 90, 90))
+        };
+        BackColor = pageColor; ApplyColors(this); playlistHost.BackColor = pageColor; clock.Visible = settings.ShowClock;
+        visualizer.Visible = settings.MusicLights; visualizerRow!.Height = settings.MusicLights ? 90 : 0; bottomRow!.Height = settings.MusicLights ? 176 : 86; visualizer.Invalidate();
+        if (IsHandleCreated) { if (settings.MusicLights || miniPlayerForm is not null) StartDancingCat(); else StopDancingCat(); }
+        RightToLeft = CurrentLanguage() == "he" ? RightToLeft.Yes : RightToLeft.No;
+        foreach (var (control, key) in localizedControls) control.Text = T(key);
+        urlBox.PlaceholderText = T("url"); RenderPlaylists(); UpdateInfo();
+    }
+
+    private void ApplyColors(Control control)
+    {
+        foreach (Control child in control.Controls)
+        {
+            ApplyControlColor(child);
+            ApplyColors(child);
+        }
+    }
+
+    private void ApplyControlColor(Control control)
+    {
+        if (Equals(control.Tag, "header") || Equals(control.Tag, "application-icon"))
+        {
+            control.BackColor = surfaceColor;
+            control.ForeColor = textColor;
+        }
+        else if (control is TextBox or ComboBox or ListBox)
+        {
+            control.BackColor = cardColor;
+            control.ForeColor = textColor;
+        }
+        else if (control is Button button)
+        {
+            button.BackColor = Equals(button.Tag, "header-action") ? surfaceColor : Equals(button.Tag, "accent") ? accentColor : cardColor;
+            button.ForeColor = textColor;
+        }
+        else if (control is Label label) ApplyLabelColor(label);
+        else if (control is Panel or TableLayoutPanel or FlowLayoutPanel) control.BackColor = surfaceColor;
+    }
+
+    private void ApplyLabelColor(Label label)
+    {
+        if (Equals(label.Tag, "accent") || Equals(label.Tag, "muted") || Equals(label.Tag, "header")) label.BackColor = surfaceColor;
+        label.ForeColor = Equals(label.Tag, "accent") ? accentColor : Equals(label.Tag, "muted") ? mutedColor : textColor;
+    }
+
+    private void RegisterLocalized(Control control, string key) => localizedControls[control] = key;
+    private string CurrentLanguage() => settings.Language switch { 1 => "ru", 2 => "en", 3 => "he", 4 => "lt", _ => CultureInfo.CurrentUICulture.TwoLetterISOLanguageName };
+    private string T(string key) => Translations.TryGetValue(CurrentLanguage(), out var language) && language.TryGetValue(key, out var text) ? text : Translations["ru"][key];
+    private void UpdateInfo()
+    {
+        clock.Text = DateTime.Now.ToString("HH:mm");
+        if (settings.ShowTrackInfo && player.IsPlaying && currentTrack is not null) status.Text = $"{T("playing")}: {FormatTime(player.Time)} / {FormatTime(player.Length)} · {currentTrack.Name}";
+    }
+    private static string FormatTime(long milliseconds)
+    {
+        if (milliseconds <= 0) return "--:--";
+        var time = TimeSpan.FromMilliseconds(milliseconds);
+        return time.TotalHours >= 1 ? $"{(long)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}" : time.ToString(@"m\:ss");
+    }
+    private static bool SystemThemeIsDark() => Microsoft.Win32.Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 1) is 0;
+
+    private void DrawVisualizer(Graphics graphics, Rectangle area)
+    {
+        if (catVideoHost.Visible && ReferenceEquals(catVideoHost.Parent, visualizer)) area.Width = Math.Max(0, area.Width - catVideoHost.Width);
+        graphics.Clear(surfaceColor);
+        var count = 20; var gap = 4; var width = Math.Max(4, (area.Width - gap * (count + 1)) / count);
+        var colors = new[] { Color.FromArgb(0, 229, 255), Color.FromArgb(41, 121, 255), Color.FromArgb(124, 77, 255), Color.FromArgb(245, 0, 87), Color.FromArgb(255, 64, 129), Color.FromArgb(118, 255, 3) };
+        for (var i = 0; i < count; i++)
+        {
+            var wave = (Math.Sin((visualizerPhase * 1.35 + i * 3) * 0.58) + Math.Sin((visualizerPhase + i * 5) * 0.31) + 2d) / 4d;
+            var height = 8 + (int)((area.Height - 14) * wave);
+            using var brush = new SolidBrush(colors[i % colors.Length]);
+            graphics.FillRectangle(brush, gap + i * (width + gap), area.Bottom - height - 4, width, height);
+        }
+        for (var i = 0; i < 10; i++)
+        {
+            var x = (int)((Math.Sin((visualizerPhase + i * 11) * 0.23) + 1d) * (area.Width - 12) / 2d);
+            var y = 4 + (int)((Math.Cos((visualizerPhase + i * 7) * 0.37) + 1d) * Math.Max(1, area.Height - 14) / 2d);
+            var size = 3 + (visualizerPhase + i) % 4;
+            using var flash = new SolidBrush(Color.FromArgb(210, colors[(i + visualizerPhase / 4) % colors.Length]));
+            graphics.FillEllipse(flash, x, y, size, size);
+        }
+    }
+
+    private void StartDancingCat()
+    {
+        try
+        {
+            catVideoHost.Visible = true;
+            if (catPlayer.IsPlaying) return;
+            var path = Path.Combine(AppContext.BaseDirectory, "Catlu.mp4");
+            if (!File.Exists(path)) { status.Text = "Не найден файл Catlu.mp4"; return; }
+            catPlayer.Hwnd = catVideoHost.Handle;
+            catMedia?.Dispose();
+            catMedia = new Media(catVlc, path, FromType.FromPath);
+            if (!catPlayer.Play(catMedia)) throw new InvalidOperationException("LibVLC не открыл Catlu.mp4.");
+        }
+        catch (Exception ex) { catVideoHost.Visible = false; status.Text = $"Не удалось запустить видео кота: {Short(ex.Message)}"; }
+    }
+
+    private void StopDancingCat()
+    {
+        catPlayer.Stop();
+        catMedia?.Dispose();
+        catMedia = null;
+        catVideoHost.Visible = false;
+    }
+
+    private void ReplayDancingCat()
+    {
+        if (closing || !IsHandleCreated) return;
+        try
+        {
+            BeginInvoke((Action)(() =>
+            {
+                if (!closing && (settings.MusicLights || miniPlayerForm is not null) && catMedia is not null) catPlayer.Play(catMedia);
+            }));
+        }
+        catch (InvalidOperationException) when (closing || !IsHandleCreated) { }
+    }
+
+    private AppSettings LoadSettings()
+    {
+        try { return File.Exists(settingsPath) ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(settingsPath)) ?? new AppSettings() : new AppSettings(); }
+        catch (JsonException) { return new AppSettings(); }
+    }
+    private bool SaveSettings()
+    {
+        try { AtomicFile.WriteAllText(settingsPath, JsonSerializer.Serialize(settings)); return true; }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            status.Text = $"Настройки не сохранены: {Short(ex.Message)}";
+            return false;
+        }
+    }
+
+    private sealed class AppSettings { public int Theme { get; set; } = 0; public int Language { get; set; } = 0; public bool ShowClock { get; set; } = false; public bool ShowTrackInfo { get; set; } = false; public bool NormalizeAudio { get; set; } = true; public bool Crossfade { get; set; } = true; public bool MusicLights { get; set; } = false; public bool ShowYoutubeLinks { get; set; } = false; }
+
+    private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
+    {
+        ["ru"] = new() { ["save"] = "Сохранить", ["newPlaylist"] = "+ СОЗДАТЬ ПЛЕЙЛИСТ", ["stations"] = "Плейлисты", ["newTrack"] = "НОВОЕ", ["linkPlaylist"] = "Связать YouTube", ["volume"] = "Громкость", ["settings"] = "Настройки", ["theme"] = "Тема", ["language"] = "Язык", ["clock"] = "Показывать часы", ["trackInfo"] = "Информация о треке", ["normalize"] = "Выравнивание звука", ["crossfade"] = "Кроссфейд", ["musicLights"] = "Цветомузыка", ["youtubeLinks"] = "Показывать ссылки YouTube", ["checkUpdates"] = "Проверить обновления", ["updates"] = "Обновления", ["upToDate"] = "Установлена последняя версия.", ["updateError"] = "Не удалось проверить обновления", ["playing"] = "Играет", ["url"] = "Вставьте ссылку на ролик или плейлист YouTube" },
+        ["en"] = new() { ["save"] = "Save", ["newPlaylist"] = "+ CREATE PLAYLIST", ["stations"] = "Playlists", ["newTrack"] = "NEW", ["linkPlaylist"] = "Link YouTube", ["volume"] = "Volume", ["settings"] = "Settings", ["theme"] = "Theme", ["language"] = "Language", ["clock"] = "Show clock", ["trackInfo"] = "Track information", ["normalize"] = "Normalize audio", ["crossfade"] = "Crossfade", ["playing"] = "Playing", ["url"] = "Paste a YouTube video or playlist link" },
+        ["he"] = new() { ["save"] = "שמור", ["newPlaylist"] = "+ פלייליסט חדש", ["stations"] = "פלייליסטים", ["newTrack"] = "חדש", ["linkPlaylist"] = "קישור YouTube", ["volume"] = "עוצמה", ["settings"] = "הגדרות", ["theme"] = "ערכת נושא", ["language"] = "שפה", ["clock"] = "הצג שעון", ["trackInfo"] = "פרטי רצועה", ["normalize"] = "איזון עוצמה", ["crossfade"] = "מעבר חלק", ["playing"] = "מנגן", ["url"] = "הדביקו קישור YouTube" },
+        ["lt"] = new() { ["save"] = "Išsaugoti", ["newPlaylist"] = "+ NAUJAS GROJARAŠTIS", ["stations"] = "Grojaraščiai", ["newTrack"] = "NAUJA", ["linkPlaylist"] = "Susieti YouTube", ["volume"] = "Garsumas", ["settings"] = "Nustatymai", ["theme"] = "Tema", ["language"] = "Kalba", ["clock"] = "Rodyti laikrodį", ["trackInfo"] = "Takelio informacija", ["normalize"] = "Garso lyginimas", ["crossfade"] = "Kryžminis perėjimas", ["playing"] = "Groja", ["url"] = "Įklijuokite YouTube nuorodą" }
+    };
+}

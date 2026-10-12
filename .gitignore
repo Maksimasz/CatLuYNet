@@ -4,3 +4,5 @@ publish/
 installer/Output/
 .vs/
 *.user
+.repowise/*
+!.repowise/config.yaml

@@ -5,17 +5,28 @@ public static class YouTubeUrl
     public static bool IsValid(string value, out bool playlist)
     {
         playlist = false;
-        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp) ||
-            !string.IsNullOrEmpty(uri.UserInfo) ||
-            !(uri.Host.Equals("youtube.com", StringComparison.OrdinalIgnoreCase) || uri.Host.EndsWith(".youtube.com", StringComparison.OrdinalIgnoreCase) || uri.Host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase))) return false;
+        if (!Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri)) return false;
+        if (!IsHttpUri(uri)) return false;
+        if (!string.IsNullOrEmpty(uri.UserInfo) || !IsYouTubeHost(uri.Host)) return false;
         var id = GetVideoId(uri);
         if (id is not null) return IsVideoId(id);
-        var list = GetQueryValue(uri, "list");
-        playlist = (uri.AbsolutePath.TrimEnd('/').Equals("/playlist", StringComparison.OrdinalIgnoreCase) || uri.AbsolutePath.TrimEnd('/').Equals("/watch", StringComparison.OrdinalIgnoreCase)) &&
-            list is { Length: > 0 } && list.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+
+        playlist = IsPlaylistUri(uri);
         return playlist;
     }
+
+    private static bool IsHttpUri(Uri uri) => uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+
+    private static bool IsPlaylistUri(Uri uri)
+    {
+        var list = GetQueryValue(uri, "list");
+        var path = uri.AbsolutePath.TrimEnd('/');
+        var isPlaylistPath = path.Equals("/playlist", StringComparison.OrdinalIgnoreCase) || path.Equals("/watch", StringComparison.OrdinalIgnoreCase);
+        var hasValidList = list is { Length: > 0 } && list.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
+        return isPlaylistPath && hasValidList;
+    }
+
+    private static bool IsYouTubeHost(string host) => host.Equals("youtube.com", StringComparison.OrdinalIgnoreCase) || host.EndsWith(".youtube.com", StringComparison.OrdinalIgnoreCase) || host.Equals("youtu.be", StringComparison.OrdinalIgnoreCase);
 
     public static bool IsVideoId(string? id) => id is { Length: 11 } && id.All(c => char.IsAsciiLetterOrDigit(c) || c is '_' or '-');
     public static string? GetPlaylistId(string value) => Uri.TryCreate(value.Trim(), UriKind.Absolute, out var uri) ? GetQueryValue(uri, "list") : null;
