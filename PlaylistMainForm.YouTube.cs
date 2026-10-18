@@ -123,13 +123,12 @@ public sealed partial class PlaylistMainForm
             if (newest > current)
             {
                 var asset = FindUpdateAsset(release.RootElement);
-                updateUrl = asset?.Url;
-                updateIsInstaller = asset?.Installer == true;
-                updateBadge!.Visible = updateUrl is not null;
-                if (showResult && updateUrl is not null && MessageBox.Show($"Доступна версия {newest}. {(updateIsInstaller ? "Скачать установщик?" : "Скачать portable ZIP? Его нужно распаковать вручную.")}", T("updates"), MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes)
-                    Process.Start(new ProcessStartInfo(updateUrl) { UseShellExecute = true });
-                else if (showResult && updateUrl is null)
-                    MessageBox.Show($"Версия {newest} найдена, но релиз не содержит установщика или portable ZIP.", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                updateUrl = asset;
+                updateVersion = newest.ToString();
+                SetUpdateLinkText($"{T("updateAvailable")} {updateVersion}");
+                updateLink!.Visible = updateUrl is not null;
+                if (showResult && updateUrl is not null) MessageBox.Show($"{T("updateAvailable")} {updateVersion}", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+                else if (showResult && updateUrl is null) MessageBox.Show($"Версия {newest} найдена, но установщик не опубликован.", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             else if (showResult) MessageBox.Show(T("upToDate"), T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -140,17 +139,61 @@ public sealed partial class PlaylistMainForm
         finally { checkingUpdate = false; }
     }
 
-    private static (string Url, bool Installer)? FindUpdateAsset(JsonElement release)
+    private async Task DownloadAndInstallUpdateAsync()
+    {
+        if (updateUrl is null || updateVersion is null || closing) return;
+        updateLink!.Enabled = false;
+        SetUpdateLinkText(T("downloadingUpdate"));
+        status.Text = T("downloadingUpdate");
+        var temporaryPath = Path.Combine(Path.GetTempPath(), $"CatLuYNet-{updateVersion}-{Guid.NewGuid():N}.download");
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, updateUrl);
+            request.Headers.UserAgent.ParseAdd("CatLuYNet/1.0");
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, lifetime.Token);
+            response.EnsureSuccessStatusCode();
+            if (response.RequestMessage?.RequestUri is not { } downloadUri || !IsTrustedUpdateUrl(downloadUri))
+                throw new InvalidOperationException("Ссылка загрузки ведёт на неизвестный сайт.");
+            await using (var source = await response.Content.ReadAsStreamAsync(lifetime.Token))
+            await using (var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                await source.CopyToAsync(destination, lifetime.Token);
+
+            var installerPath = Path.Combine(Path.GetTempPath(), $"CatLuYNet-{updateVersion}-Setup.exe");
+            File.Move(temporaryPath, installerPath, overwrite: true);
+            if (!SaveLibrary()) throw new IOException("Не удалось сохранить библиотеку перед обновлением.");
+            installingUpdate = true;
+            if (Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true, Verb = "runas" }) is null)
+                throw new InvalidOperationException("Не удалось запустить установщик.");
+            Close();
+        }
+        catch (Exception ex)
+        {
+            try { if (File.Exists(temporaryPath)) File.Delete(temporaryPath); } catch (IOException) { }
+            if (!closing)
+            {
+                status.Text = $"{T("updateError")}: {Short(ex.Message)}";
+                installingUpdate = false;
+                SetUpdateLinkText($"{T("updateAvailable")} {updateVersion}");
+                updateLink.Enabled = true;
+            }
+        }
+    }
+
+    private void SetUpdateLinkText(string text)
+    {
+        updateLink!.Text = text;
+        updateLink.LinkArea = new LinkArea(0, text.Length);
+    }
+
+    private static string? FindUpdateAsset(JsonElement release)
     {
         if (release.ValueKind != JsonValueKind.Object || !release.TryGetProperty("assets", out var assets) || assets.ValueKind != JsonValueKind.Array) return null;
-        (string Url, bool Installer)? portable = null;
         foreach (var asset in assets.EnumerateArray())
         {
             if (!TryGetUpdateAsset(asset, out var url, out var installer)) continue;
-            if (installer) return (url, true);
-            portable ??= (url, false);
+            if (installer) return url;
         }
-        return portable;
+        return null;
     }
 
     private static bool TryGetUpdateAsset(JsonElement asset, out string url, out bool installer)
@@ -164,7 +207,10 @@ public sealed partial class PlaylistMainForm
         if (!installer && !name.EndsWith("-win-x64.zip", StringComparison.OrdinalIgnoreCase)) return false;
         if (!asset.TryGetProperty("browser_download_url", out var urlElement) || urlElement.ValueKind != JsonValueKind.String) return false;
         url = urlElement.GetString() ?? "";
-        return !string.IsNullOrWhiteSpace(url);
+        return Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps && uri.Port == 443 && uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) && string.IsNullOrEmpty(uri.UserInfo);
     }
+
+    private static bool IsTrustedUpdateUrl(Uri uri) => uri.Scheme == Uri.UriSchemeHttps && uri.Port == 443 && string.IsNullOrEmpty(uri.UserInfo) &&
+        (uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase) || uri.Host.Equals("release-assets.githubusercontent.com", StringComparison.OrdinalIgnoreCase));
 
 }

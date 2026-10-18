@@ -19,6 +19,7 @@ public sealed partial class PlaylistMainForm : Form
     private AppSettings settings = new();
     private readonly System.Windows.Forms.Timer infoTimer = new() { Interval = 500 };
     private readonly System.Windows.Forms.Timer visualizerTimer = new() { Interval = 70 };
+    private readonly System.Windows.Forms.Timer updateCheckTimer = new() { Interval = (int)TimeSpan.FromHours(24).TotalMilliseconds };
     private readonly Panel visualizer = new() { Dock = DockStyle.Fill, Margin = Padding.Empty, Visible = false };
     private readonly Panel catVideoHost = new() { Dock = DockStyle.Right, Width = 160, BackColor = Color.Black, Visible = false };
     private readonly LibVLC catVlc;
@@ -27,17 +28,18 @@ public sealed partial class PlaylistMainForm : Form
     private RowStyle? visualizerRow;
     private RowStyle? bottomRow;
     private int visualizerPhase;
-    private readonly HttpClient http = new();
+    private readonly HttpClient http = new() { Timeout = TimeSpan.FromMinutes(15) };
     private Button? settingsButton;
     private Form? miniPlayerForm;
     private Label? miniTrackTitle;
     private Button? miniPlayButton;
     private TrackBar? miniVolume;
     private bool restoringMiniPlayer;
-    private Label? updateBadge;
+    private LinkLabel? updateLink;
     private string? updateUrl;
-    private bool updateIsInstaller;
+    private string? updateVersion;
     private bool checkingUpdate;
+    private bool installingUpdate;
     private readonly Dictionary<Control, string> localizedControls = [];
     private Color pageColor = Color.FromArgb(15, 15, 15);
     private Color surfaceColor = Color.FromArgb(20, 20, 20);
@@ -103,20 +105,28 @@ public sealed partial class PlaylistMainForm : Form
         var mini = Button("▣", surfaceColor); mini.Size = new Size(36, 36); mini.Margin = Padding.Empty; mini.Dock = DockStyle.None; mini.Tag = "header-action"; mini.TabStop = false; mini.AccessibleName = "Мини-плеер"; new ToolTip().SetToolTip(mini, "Мини-плеер");
         mini.FlatAppearance.MouseOverBackColor = surfaceColor; mini.FlatAppearance.MouseDownBackColor = surfaceColor;
         var appVersion = typeof(PlaylistMainForm).Assembly.GetName().Version?.ToString(3) ?? "1.0";
-        var header = new Label { Text = $"CatLu YNet {appVersion}", Dock = DockStyle.Fill, Padding = new Padding(5), Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = surfaceColor, TextAlign = ContentAlignment.MiddleLeft, Tag = "header" };
+        var header = new Label { Text = $"CatLu YNet {appVersion}", AutoSize = true, Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = surfaceColor, Tag = "header" };
+        updateLink = new LinkLabel { AutoSize = true, Visible = false, Font = new Font("Segoe UI", 9, FontStyle.Bold), LinkColor = accentColor, ActiveLinkColor = accentColor, VisitedLinkColor = accentColor, BackColor = surfaceColor, Tag = "accent", Cursor = Cursors.Hand };
+        var titleBar = new Panel { Dock = DockStyle.Fill, BackColor = surfaceColor, Tag = "header" };
+        void PositionHeaderItems()
+        {
+            header.Location = new Point(5, Math.Max(0, (titleBar.ClientSize.Height - header.Height) / 2));
+            updateLink.Location = new Point(header.Right + 12, Math.Max(0, (titleBar.ClientSize.Height - updateLink.Height) / 2));
+        }
+        titleBar.Controls.AddRange([header, updateLink]);
+        titleBar.Resize += (_, _) => PositionHeaderItems();
         var appIcon = new PictureBox { Image = Icon.ToBitmap(), SizeMode = PictureBoxSizeMode.Zoom, Dock = DockStyle.Fill, Margin = new Padding(8), BackColor = surfaceColor, Tag = "application-icon" };
         settingsButton = Button("⚙", surfaceColor); settingsButton.Size = new Size(36, 36); settingsButton.Margin = Padding.Empty; settingsButton.Dock = DockStyle.None; settingsButton.Tag = "header-action"; settingsButton.TabStop = false;
         settingsButton.FlatAppearance.MouseOverBackColor = surfaceColor; settingsButton.FlatAppearance.MouseDownBackColor = surfaceColor;
-        updateBadge = new Label { Text = "1", Visible = false, AutoSize = false, Width = 18, Height = 18, Left = 27, Top = 3, TextAlign = ContentAlignment.MiddleCenter, BackColor = Color.FromArgb(229, 9, 20), ForeColor = Color.White, Font = new Font("Segoe UI", 8, FontStyle.Bold) };
         var settingsSlot = new Panel { Dock = DockStyle.Right, Width = 96, BackColor = surfaceColor };
         mini.Location = new Point(8, 8); settingsButton.Location = new Point(52, 8);
-        settingsSlot.Controls.AddRange([mini, settingsButton, updateBadge]);
+        settingsSlot.Controls.AddRange([mini, settingsButton]);
         var headerBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, BackColor = surfaceColor };
         headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48));
         headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         headerBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 96));
         headerBar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        headerBar.Controls.Add(appIcon, 0, 0); headerBar.Controls.Add(header, 1, 0); headerBar.Controls.Add(settingsSlot, 2, 0);
+        headerBar.Controls.Add(appIcon, 0, 0); headerBar.Controls.Add(titleBar, 1, 0); headerBar.Controls.Add(settingsSlot, 2, 0);
         var stationBar = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = Color.FromArgb(20, 20, 20), Padding = new Padding(5) };
         stationBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         stationBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
@@ -163,8 +173,8 @@ public sealed partial class PlaylistMainForm : Form
 
         RegisterLocalized(save, "save"); RegisterLocalized(create, "newPlaylist"); RegisterLocalized(stationTitle, "stations"); RegisterLocalized(volumeTitle, "volume");
 
-        Load += async (_, _) => { LoadLibrary(); if (settings.MusicLights) StartDancingCat(); await CheckLinkedPlaylistsAsync(); await CheckForUpdateAsync(false); };
-        FormClosing += (_, e) => { if (libraryLoaded && !SaveLibrary()) e.Cancel = true; };
+        Load += async (_, _) => { LoadLibrary(); if (settings.MusicLights) StartDancingCat(); updateCheckTimer.Start(); _ = CheckForUpdateAsync(false); await CheckLinkedPlaylistsAsync(); };
+        FormClosing += (_, e) => { if (!installingUpdate && libraryLoaded && !SaveLibrary()) e.Cancel = true; };
         Resize += (_, _) => RenderPlaylists();
         save.Click += async (_, _) => await SaveLinkAsync();
         create.Click += (_, _) => CreatePlaylist();
@@ -177,6 +187,8 @@ public sealed partial class PlaylistMainForm : Form
         volume.Scroll += (_, _) => SetPlaybackVolume(volume.Value);
         crossfadeTimer.Tick += async (_, _) => await HandleCrossfadeAsync();
         settingsButton.Click += (_, _) => ShowSettings();
+        updateLink.LinkClicked += async (_, _) => await DownloadAndInstallUpdateAsync();
+        updateCheckTimer.Tick += async (_, _) => await CheckForUpdateAsync(false);
         infoTimer.Tick += (_, _) => UpdateInfo();
         visualizer.Paint += (_, e) => DrawVisualizer(e.Graphics, visualizer.ClientRectangle);
         visualizerTimer.Tick += (_, _) => { if (visualizer.Visible && player.IsPlaying) { visualizerPhase++; visualizer.Invalidate(); } };
@@ -193,7 +205,7 @@ public sealed partial class PlaylistMainForm : Form
             lifetime.Cancel();
             Stop();
             StopDancingCat();
-            infoTimer.Dispose(); visualizerTimer.Dispose(); crossfadeTimer.Dispose();
+            infoTimer.Dispose(); visualizerTimer.Dispose(); crossfadeTimer.Dispose(); updateCheckTimer.Dispose();
             catPlayer.Dispose(); catVlc.Dispose(); player.Dispose(); vlc.Dispose(); http.Dispose();
             playbackRequest.Dispose(); lifetime.Dispose();
             trackFont.Dispose(); playlistFont.Dispose(); editFont.Dispose(); linkFont.Dispose();

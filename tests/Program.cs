@@ -90,20 +90,26 @@ internal static class Program
 
     private static void TestReleaseAssets()
     {
-        using var release = JsonDocument.Parse("""{"assets":[{"name":"CatLuYNet-1.1.3-win-x64.zip","browser_download_url":"https://example.invalid/app.zip"}]}""");
-        var portable = ((string Url, bool Installer)?)Call(null, "FindUpdateAsset", release.RootElement);
-        Check(portable is { Installer: false, Url: "https://example.invalid/app.zip" }, "update checker recognizes portable ZIP releases");
+        using var release = JsonDocument.Parse("""{"assets":[{"name":"CatLuYNet-1.1.3-win-x64.zip","browser_download_url":"https://github.com/Maksimasz/CatLuYNet/releases/download/v1.1.3/app.zip"}]}""");
+        Check(Call(null, "FindUpdateAsset", release.RootElement) is null, "updater requires an installer for automatic installation");
 
-        using var withInstaller = JsonDocument.Parse("""{"assets":[{"name":"CatLuYNet-1.1.3-win-x64.zip","browser_download_url":"https://example.invalid/app.zip"},{"name":"CatLuYNet-1.1.3-Setup.exe","browser_download_url":"https://example.invalid/setup.exe"}]}""");
-        var installer = ((string Url, bool Installer)?)Call(null, "FindUpdateAsset", withInstaller.RootElement);
-        Check(installer is { Installer: true, Url: "https://example.invalid/setup.exe" }, "update checker prefers installer when available");
+        using var withInstaller = JsonDocument.Parse("""{"assets":[{"name":"CatLuYNet-1.1.3-win-x64.zip","browser_download_url":"https://github.com/Maksimasz/CatLuYNet/releases/download/v1.1.3/app.zip"},{"name":"CatLuYNet-1.1.3-Setup.exe","browser_download_url":"https://github.com/Maksimasz/CatLuYNet/releases/download/v1.1.3/setup.exe"}]}""");
+        Check((string?)Call(null, "FindUpdateAsset", withInstaller.RootElement) == "https://github.com/Maksimasz/CatLuYNet/releases/download/v1.1.3/setup.exe", "updater selects GitHub installer");
 
         using var empty = JsonDocument.Parse("""{"assets":[]}""");
         Check(Call(null, "FindUpdateAsset", empty.RootElement) is null, "update checker handles releases without assets");
 
-        using var malformed = JsonDocument.Parse("""{"assets":[null,3,{"name":4,"browser_download_url":"https://example.invalid/bad.exe"},{"name":"CatLuYNet-1.1.4-Setup.exe","browser_download_url":false},{"name":"CatLuYNet-1.1.4-Setup.exe","browser_download_url":"https://example.invalid/setup.exe"}]}""");
-        var validAfterMalformed = ((string Url, bool Installer)?)Call(null, "FindUpdateAsset", malformed.RootElement);
-        Check(validAfterMalformed is { Installer: true, Url: "https://example.invalid/setup.exe" }, "update checker skips malformed release assets");
+        using var malformed = JsonDocument.Parse("""{"assets":[null,3,{"name":4,"browser_download_url":"https://github.com/Maksimasz/CatLuYNet/releases/download/bad.exe"},{"name":"CatLuYNet-1.1.4-Setup.exe","browser_download_url":false},{"name":"CatLuYNet-1.1.4-Setup.exe","browser_download_url":"https://example.invalid/setup.exe"},{"name":"CatLuYNet-1.1.4-Setup.exe","browser_download_url":"https://github.com/Maksimasz/CatLuYNet/releases/download/v1.1.4/setup.exe"}]}""");
+        Check((string?)Call(null, "FindUpdateAsset", malformed.RootElement) == "https://github.com/Maksimasz/CatLuYNet/releases/download/v1.1.4/setup.exe", "update checker skips malformed and untrusted assets");
+        Check((bool)Call(null, "IsTrustedUpdateUrl", new Uri("https://release-assets.githubusercontent.com/setup.exe"))!, "download allows official GitHub release assets");
+        foreach (var url in new[] { "http://github.com/setup.exe", "https://example.invalid/setup.exe", "https://release-assets.githubusercontent.com.evil.invalid/setup.exe", "https://github.com:444/setup.exe" })
+            Check(!(bool)Call(null, "IsTrustedUpdateUrl", new Uri(url))!, "reject update redirect: " + url);
+        using var form = NewForm(Path.Combine(Path.GetTempPath(), "ynet-update-test-" + Guid.NewGuid().ToString("N")));
+        Check(((System.Windows.Forms.Timer)Get(form, "updateCheckTimer")).Interval == (int)TimeSpan.FromHours(24).TotalMilliseconds, "update checks repeat every 24 hours");
+        var updateLink = (LinkLabel)Get(form, "updateLink");
+        Check(!updateLink.Visible, "update link stays hidden when no new release is found");
+        Call(form, "SetUpdateLinkText", "Доступно обновление 1.2.0");
+        Check(updateLink.LinkArea.Start == 0 && updateLink.LinkArea.Length == updateLink.Text.Length, "entire available version label is clickable");
     }
 
     private static void TestSharedCore(string root)
