@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.Json;
 using CatLuYNet.Core;
 using LibVLCSharp.Shared;
@@ -22,12 +22,23 @@ public sealed partial class PlaylistMainForm
         var youtubeLinks = new CheckBox { Text = T("youtubeLinks"), Checked = settings.ShowYoutubeLinks, AutoSize = true };
         var checkUpdates = Button(T("checkUpdates"), cardColor); checkUpdates.AutoSize = false; checkUpdates.Size = new Size(235, 32); checkUpdates.Anchor = AnchorStyles.Top | AnchorStyles.Left; checkUpdates.Margin = Padding.Empty; checkUpdates.TextAlign = ContentAlignment.MiddleCenter;
         var save = Button(T("save"), accentColor); save.AutoSize = false; save.Size = new Size(120, 32); save.Anchor = AnchorStyles.Top | AnchorStyles.Right; save.Margin = Padding.Empty; save.TextAlign = ContentAlignment.MiddleCenter;
-        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 10, Padding = new Padding(5) };
+        var import = Button(T("importPlaylists"), cardColor);
+        var export = Button(T("exportPlaylists"), cardColor);
+        foreach (var button in new[] { checkUpdates, save, import, export })
+        {
+            button.AutoSize = false;
+            button.Padding = Padding.Empty;
+            button.TextAlign = ContentAlignment.MiddleCenter;
+        }
+        foreach (var button in new[] { import, export }) { button.Dock = DockStyle.Fill; button.Enabled = libraryLoaded; }
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 12, Padding = new Padding(5), AutoScroll = true };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 10; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        for (var i = 0; i < 12; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         grid.Controls.Add(new Label { Text = T("theme"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0); grid.Controls.Add(theme, 1, 0);
         grid.Controls.Add(new Label { Text = T("language"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1); grid.Controls.Add(language, 1, 1);
-        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(musicLights, 1, 6); grid.Controls.Add(youtubeLinks, 1, 7); grid.Controls.Add(checkUpdates, 1, 8); grid.Controls.Add(save, 1, 9);
+        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(musicLights, 1, 6); grid.Controls.Add(youtubeLinks, 1, 7); grid.Controls.Add(checkUpdates, 1, 8); grid.Controls.Add(save, 1, 11);
+        grid.Controls.Add(import, 0, 9); grid.SetColumnSpan(import, 2);
+        grid.Controls.Add(export, 0, 10); grid.SetColumnSpan(export, 2);
         dialog.Controls.Add(grid);
         save.Click += (_, _) =>
         {
@@ -35,7 +46,71 @@ public sealed partial class PlaylistMainForm
             if (SaveSettings()) { ApplySettings(); dialog.Close(); }
         };
         checkUpdates.Click += async (_, _) => await CheckForUpdateAsync(true);
+        import.Click += (_, _) => ImportPlaylists(dialog);
+        export.Click += (_, _) => ExportPlaylists(dialog);
         dialog.ShowDialog(this);
+    }
+
+    private void ImportPlaylists(Form owner)
+    {
+        using var file = new OpenFileDialog { Title = T("importPlaylists"), Filter = "JSON (*.json)|*.json", CheckFileExists = true };
+        if (file.ShowDialog(owner) != DialogResult.OK) return;
+        try
+        {
+            var imported = PlaylistStore.Import(file.FileName, statePath, playlists);
+            playlists.AddRange(imported);
+            RenderPlaylists();
+            MessageBox.Show(owner, $"{T("importedPlaylists")}: {imported.Count}", T("importPlaylists"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(owner, $"{T("importError")}: {Short(ex.Message)}", T("importPlaylists"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private void ExportPlaylists(Form owner)
+    {
+        var selected = SelectPlaylistForExport(owner);
+        if (selected is null) return;
+        using var file = new SaveFileDialog { Title = T("exportPlaylists"), Filter = "JSON (*.json)|*.json", DefaultExt = "json", FileName = PlaylistFileName(selected.Name), AddExtension = true, OverwritePrompt = true };
+        if (file.ShowDialog(owner) != DialogResult.OK) return;
+        try
+        {
+            PlaylistStore.Save(file.FileName, [selected]);
+            MessageBox.Show(owner, T("exportedPlaylists"), T("exportPlaylists"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            MessageBox.Show(owner, $"{T("exportError")}: {Short(ex.Message)}", T("exportPlaylists"), MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    private static string PlaylistFileName(string name)
+    {
+        var safeName = string.Concat(name.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim().TrimEnd('.');
+        if (safeName.Length == 0) safeName = "Playlist";
+        if (System.Text.RegularExpressions.Regex.IsMatch(safeName, @"^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(\.|$)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) safeName = "_" + safeName;
+        return safeName + ".json";
+    }
+
+    private Playlist? SelectPlaylistForExport(Form owner)
+    {
+        using var dialog = new Form { Text = T("exportPlaylists"), Size = new Size(430, 420), StartPosition = FormStartPosition.CenterParent, BackColor = surfaceColor, ForeColor = textColor, MinimizeBox = false, MaximizeBox = false, Padding = new Padding(8) };
+        var list = new ListBox { Dock = DockStyle.Fill, DisplayMember = nameof(Playlist.Name), SelectionMode = SelectionMode.One, BackColor = cardColor, ForeColor = textColor, BorderStyle = BorderStyle.None, IntegralHeight = false, HorizontalScrollbar = true };
+        list.Items.AddRange(playlists.ToArray());
+        var export = Button(T("exportPlaylists"), accentColor);
+        export.Dock = DockStyle.Bottom;
+        export.AutoSize = false;
+        export.Height = 38;
+        export.Padding = Padding.Empty;
+        export.Enabled = false;
+        export.DialogResult = DialogResult.OK;
+        list.SelectedIndexChanged += (_, _) => export.Enabled = list.SelectedItem is Playlist;
+        dialog.Controls.Add(list);
+        dialog.Controls.Add(export);
+        dialog.AcceptButton = export;
+        if (list.Items.Count > 0) list.SelectedIndex = 0;
+        return dialog.ShowDialog(owner) == DialogResult.OK ? list.SelectedItem as Playlist : null;
     }
 
     private void ApplySettings()
@@ -190,9 +265,9 @@ public sealed partial class PlaylistMainForm
 
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {
-        ["ru"] = new() { ["save"] = "Сохранить", ["newPlaylist"] = "+ СОЗДАТЬ ПЛЕЙЛИСТ", ["stations"] = "Плейлисты", ["newTrack"] = "НОВОЕ", ["linkPlaylist"] = "Связать YouTube", ["volume"] = "Громкость", ["settings"] = "Настройки", ["theme"] = "Тема", ["language"] = "Язык", ["clock"] = "Показывать часы", ["trackInfo"] = "Информация о треке", ["normalize"] = "Выравнивание звука", ["crossfade"] = "Кроссфейд", ["musicLights"] = "Цветомузыка", ["youtubeLinks"] = "Показывать ссылки YouTube", ["checkUpdates"] = "Проверить обновления", ["updates"] = "Обновления", ["upToDate"] = "Установлена последняя версия.", ["updateError"] = "Не удалось проверить обновления", ["playing"] = "Играет", ["url"] = "Вставьте ссылку на ролик или плейлист YouTube" },
-        ["en"] = new() { ["save"] = "Save", ["newPlaylist"] = "+ CREATE PLAYLIST", ["stations"] = "Playlists", ["newTrack"] = "NEW", ["linkPlaylist"] = "Link YouTube", ["volume"] = "Volume", ["settings"] = "Settings", ["theme"] = "Theme", ["language"] = "Language", ["clock"] = "Show clock", ["trackInfo"] = "Track information", ["normalize"] = "Normalize audio", ["crossfade"] = "Crossfade", ["playing"] = "Playing", ["url"] = "Paste a YouTube video or playlist link" },
-        ["he"] = new() { ["save"] = "שמור", ["newPlaylist"] = "+ פלייליסט חדש", ["stations"] = "פלייליסטים", ["newTrack"] = "חדש", ["linkPlaylist"] = "קישור YouTube", ["volume"] = "עוצמה", ["settings"] = "הגדרות", ["theme"] = "ערכת נושא", ["language"] = "שפה", ["clock"] = "הצג שעון", ["trackInfo"] = "פרטי רצועה", ["normalize"] = "איזון עוצמה", ["crossfade"] = "מעבר חלק", ["playing"] = "מנגן", ["url"] = "הדביקו קישור YouTube" },
-        ["lt"] = new() { ["save"] = "Išsaugoti", ["newPlaylist"] = "+ NAUJAS GROJARAŠTIS", ["stations"] = "Grojaraščiai", ["newTrack"] = "NAUJA", ["linkPlaylist"] = "Susieti YouTube", ["volume"] = "Garsumas", ["settings"] = "Nustatymai", ["theme"] = "Tema", ["language"] = "Kalba", ["clock"] = "Rodyti laikrodį", ["trackInfo"] = "Takelio informacija", ["normalize"] = "Garso lyginimas", ["crossfade"] = "Kryžminis perėjimas", ["playing"] = "Groja", ["url"] = "Įklijuokite YouTube nuorodą" }
+        ["ru"] = new() { ["importPlaylists"] = "Импорт плейлистов", ["exportPlaylists"] = "Экспорт плейлистов", ["importedPlaylists"] = "Добавлено плейлистов", ["exportedPlaylists"] = "Плейлисты экспортированы.", ["importError"] = "Не удалось импортировать плейлисты", ["exportError"] = "Не удалось экспортировать плейлисты", ["save"] = "Сохранить", ["newPlaylist"] = "+ СОЗДАТЬ ПЛЕЙЛИСТ", ["stations"] = "Плейлисты", ["newTrack"] = "НОВОЕ", ["linkPlaylist"] = "Связать YouTube", ["volume"] = "Громкость", ["settings"] = "Настройки", ["theme"] = "Тема", ["language"] = "Язык", ["clock"] = "Показывать часы", ["trackInfo"] = "Информация о треке", ["normalize"] = "Выравнивание звука", ["crossfade"] = "Кроссфейд", ["musicLights"] = "Цветомузыка", ["youtubeLinks"] = "Показывать ссылки YouTube", ["checkUpdates"] = "Проверить обновления", ["updates"] = "Обновления", ["upToDate"] = "Установлена последняя версия.", ["updateError"] = "Не удалось проверить обновления", ["playing"] = "Играет", ["url"] = "Вставьте ссылку на ролик или плейлист YouTube" },
+        ["en"] = new() { ["importPlaylists"] = "Import playlists", ["exportPlaylists"] = "Export playlists", ["importedPlaylists"] = "Playlists added", ["exportedPlaylists"] = "Playlists exported.", ["importError"] = "Could not import playlists", ["exportError"] = "Could not export playlists", ["save"] = "Save", ["newPlaylist"] = "+ CREATE PLAYLIST", ["stations"] = "Playlists", ["newTrack"] = "NEW", ["linkPlaylist"] = "Link YouTube", ["volume"] = "Volume", ["settings"] = "Settings", ["theme"] = "Theme", ["language"] = "Language", ["clock"] = "Show clock", ["trackInfo"] = "Track information", ["normalize"] = "Normalize audio", ["crossfade"] = "Crossfade", ["playing"] = "Playing", ["url"] = "Paste a YouTube video or playlist link" },
+        ["he"] = new() { ["importPlaylists"] = "ייבוא פלייליסטים", ["exportPlaylists"] = "ייצוא פלייליסטים", ["importedPlaylists"] = "פלייליסטים שנוספו", ["exportedPlaylists"] = "הפלייליסטים יוצאו.", ["importError"] = "ייבוא הפלייליסטים נכשל", ["exportError"] = "ייצוא הפלייליסטים נכשל", ["save"] = "שמור", ["newPlaylist"] = "+ פלייליסט חדש", ["stations"] = "פלייליסטים", ["newTrack"] = "חדש", ["linkPlaylist"] = "קישור YouTube", ["volume"] = "עוצמה", ["settings"] = "הגדרות", ["theme"] = "ערכת נושא", ["language"] = "שפה", ["clock"] = "הצג שעון", ["trackInfo"] = "פרטי רצועה", ["normalize"] = "איזון עוצמה", ["crossfade"] = "מעבר חלק", ["playing"] = "מנגן", ["url"] = "הדביקו קישור YouTube" },
+        ["lt"] = new() { ["importPlaylists"] = "Importuoti grojaraščius", ["exportPlaylists"] = "Eksportuoti grojaraščius", ["importedPlaylists"] = "Pridėta grojaraščių", ["exportedPlaylists"] = "Grojaraščiai eksportuoti.", ["importError"] = "Nepavyko importuoti grojaraščių", ["exportError"] = "Nepavyko eksportuoti grojaraščių", ["save"] = "Išsaugoti", ["newPlaylist"] = "+ NAUJAS GROJARAŠTIS", ["stations"] = "Grojaraščiai", ["newTrack"] = "NAUJA", ["linkPlaylist"] = "Susieti YouTube", ["volume"] = "Garsumas", ["settings"] = "Nustatymai", ["theme"] = "Tema", ["language"] = "Kalba", ["clock"] = "Rodyti laikrodį", ["trackInfo"] = "Takelio informacija", ["normalize"] = "Garso lyginimas", ["crossfade"] = "Kryžminis perėjimas", ["playing"] = "Groja", ["url"] = "Įklijuokite YouTube nuorodą" }
     };
 }

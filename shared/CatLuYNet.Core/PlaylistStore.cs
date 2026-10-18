@@ -5,12 +5,24 @@ namespace CatLuYNet.Core;
 
 public static class PlaylistStore
 {
-    private sealed class Library { public List<Playlist>? Playlists { get; set; } = []; }
+    private sealed class Library { public required List<Playlist>? Playlists { get; set; } }
 
     public static List<Playlist> Load(string statePath, string oldStatePath)
     {
         var path = File.Exists(statePath) ? statePath : oldStatePath;
         if (!File.Exists(path)) return [];
+        return Read(path);
+    }
+
+    public static List<Playlist> Import(string sourcePath, string statePath, List<Playlist> existing)
+    {
+        var imported = Read(sourcePath);
+        if (imported.Count > 0) Save(statePath, [.. existing, .. imported]);
+        return imported;
+    }
+
+    private static List<Playlist> Read(string path)
+    {
         var json = File.ReadAllText(path);
         List<Playlist>? loaded;
         if (json.TrimStart().StartsWith('{')) loaded = JsonSerializer.Deserialize<Library>(json)?.Playlists;

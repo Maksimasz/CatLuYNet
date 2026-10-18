@@ -37,6 +37,8 @@ internal static class Program
             TestReleaseAssets();
             TestSharedCore(directory);
             TestStorage(directory);
+            TestPlaylistTransfer(directory);
+            TestPlaylistExportSelection(directory);
             TestPlaybackAndControls(directory);
             // No WinForms continuation is needed by the subprocess checks.
             SynchronizationContext.SetSynchronizationContext(null);
@@ -119,6 +121,87 @@ internal static class Program
         PlaylistStore.Save(path, [new Playlist { Name = "Invalid source", SourceUrl = "https://example.invalid/playlist", Tracks = [] }]);
         try { PlaylistStore.Load(path, Path.Combine(root, "missing.json")); throw new Exception("Invalid remote playlist source was accepted"); }
         catch (JsonException) { Check(true, "linked playlist source URL is validated"); }
+    }
+
+    private static void TestPlaylistTransfer(string root)
+    {
+        var path = Path.Combine(root, "transfer", "stations.json");
+        var exportPath = Path.Combine(root, "export.json");
+        var playlist = new Playlist { Name = "Музыка עברית", Expanded = false, SourceUrl = "https://youtube.com/playlist?list=PL123", LastCheckedUtc = DateTime.UtcNow,
+            Tracks = [new Track { Id = "abcdefghijk", Name = "Первый", Artist = "Artist", IsNew = true }, new Track { Id = "dQw4w9WgXcQ", Name = "Второй" }] };
+        PlaylistStore.Save(exportPath, [playlist, new Playlist { Name = "Пустой" }]);
+        List<Playlist> existing = [new Playlist { Name = playlist.Name }];
+        PlaylistStore.Save(path, existing);
+        var original = File.ReadAllText(path);
+        var imported = PlaylistStore.Import(exportPath, path, existing);
+        Check(existing.Count == 1, "import leaves live collection untouched until successful commit");
+        existing.AddRange(imported);
+        var restored = PlaylistStore.Load(path, path);
+        Check(restored.Count == 3 && restored[0].Tracks.Count == 0 && restored[2].Tracks.Count == 0, "import appends same-name and empty playlists");
+        Check(JsonSerializer.Serialize(restored[1]) == JsonSerializer.Serialize(playlist), "export/import preserves all metadata, Unicode and track order");
+        Check(File.ReadAllText(path + ".bak") == original, "import backs up previous library");
+        var saved = File.ReadAllText(path);
+        foreach (var invalid in new[] { "{", "{}", "null", "{\"Playlists\":null}", "{\"Playlists\":[null]}", "{\"Playlists\":[{\"Tracks\":[{\"Id\":\"bad\"}]}]}" })
+        {
+            File.WriteAllText(exportPath, invalid);
+            try { PlaylistStore.Import(exportPath, path, existing); throw new Exception("Invalid import accepted"); }
+            catch (JsonException) { Check(File.ReadAllText(path) == saved && existing.Count == 3, "invalid import preserves library"); }
+        }
+        PlaylistStore.Save(exportPath, [playlist]);
+        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+        {
+            try { PlaylistStore.Import(exportPath, path, existing); throw new Exception("Locked import accepted"); }
+            catch (IOException) { Check(existing.Count == 3, "failed import does not change live collection"); }
+        }
+        Check(File.ReadAllText(path) == saved, "failed import preserves saved library");
+        Check(Directory.GetFiles(Path.GetDirectoryName(path)!, "*.tmp").Length == 0, "failed import cleans temporary files");
+        PlaylistStore.Save(exportPath, []);
+        Check(PlaylistStore.Import(exportPath, path, existing).Count == 0 && File.ReadAllText(path) == saved, "empty import is a no-op");
+        File.Delete(exportPath);
+        try { PlaylistStore.Import(exportPath, path, existing); throw new Exception("Missing import accepted"); }
+        catch (FileNotFoundException) { Check(File.ReadAllText(path) == saved, "missing import preserves library"); }
+    }
+
+    private static void TestPlaylistExportSelection(string root)
+    {
+        Check((string)Call(null, "PlaylistFileName", "Моя музыка")! == "Моя музыка.json", "export filename uses playlist name");
+        Check((string)Call(null, "PlaylistFileName", "Rock/Pop: Hits?")! == "Rock_Pop_ Hits_.json", "export filename replaces forbidden characters");
+        Check((string)Call(null, "PlaylistFileName", " .. ")! == "Playlist.json", "empty filename has fallback");
+        Check((string)Call(null, "PlaylistFileName", "con")! == "_con.json", "reserved Windows filename is escaped");
+        using var form = NewForm(Path.Combine(root, "export-selection"));
+        Call(form, "LoadLibrary");
+        var playlists = (List<Playlist>)Get(form, "playlists");
+        playlists.AddRange([new Playlist { Name = "Same name" }, new Playlist { Name = "Same name", Tracks = [new Track { Id = "abcdefghijk", Name = "Selected track" }] }]);
+        using var timer = new System.Windows.Forms.Timer { Interval = 50 };
+        var cancel = false;
+        var emptyDisabled = false;
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            var dialog = Application.OpenForms.Cast<Form>().Last();
+            var list = dialog.Controls.OfType<ListBox>().Single();
+            var button = dialog.Controls.OfType<Button>().Single();
+            emptyDisabled = list.Items.Count == 0 && !button.Enabled;
+            if (cancel || list.Items.Count == 0) dialog.DialogResult = DialogResult.Cancel;
+            else { list.SelectedIndex = 1; button.PerformClick(); }
+        };
+        timer.Start();
+        var selected = (Playlist)Call(form, "SelectPlaylistForExport", form)!;
+        Check(ReferenceEquals(selected, playlists[1]), "export selects exact playlist even with identical names");
+        var path = Path.Combine(root, "selected-export.json");
+        PlaylistStore.Save(path, [selected]);
+        var exported = PlaylistStore.Load(path, path);
+        Check(exported.Count == 1 && exported[0].Tracks.Single().Id == "abcdefghijk", "individual export contains only selected playlist");
+        var target = Path.Combine(root, "individual-import.json");
+        var imported = PlaylistStore.Import(path, target, [playlists[0]]);
+        var restored = PlaylistStore.Load(target, target);
+        Check(imported.Count == 1 && restored.Count == 2 && restored[0].Tracks.Count == 0 && restored[1].Tracks.Count == 1, "individual import keeps same-name playlists separate");
+        cancel = true;
+        timer.Start();
+        Check(Call(form, "SelectPlaylistForExport", form) is null && playlists.Count == 2, "cancel export selection leaves playlists unchanged");
+        playlists.Clear();
+        timer.Start();
+        Check(Call(form, "SelectPlaylistForExport", form) is null && emptyDisabled, "empty library cannot confirm export");
     }
 
     private static void TestStorage(string root)
