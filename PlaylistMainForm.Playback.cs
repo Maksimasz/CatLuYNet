@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using CatLuYNet.Core;
 using LibVLCSharp.Shared;
 
@@ -53,11 +53,7 @@ public sealed partial class PlaylistMainForm
         try
         {
             status.Text = "Получение аудиопотока...";
-            var output = await RunYtDlpAsync(token, "--no-playlist", "-f", "bestaudio/best", "-g", $"https://www.youtube.com/watch?v={track.Id}");
-            token.ThrowIfCancellationRequested();
-            var url = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-            if (string.IsNullOrWhiteSpace(url)) throw new InvalidOperationException("yt-dlp не вернул поток.");
-            media = new Media(vlc, new Uri(url));
+            media = new Media(vlc, await ResolveAudioAsync(track, token));
             if (settings.NormalizeAudio) media.AddOption(":audio-filter=compressor");
             SetPlaybackVolume(volume.Value);
             if (!player.Play(media)) throw new InvalidOperationException("LibVLC не открыл поток.");
@@ -113,7 +109,7 @@ public sealed partial class PlaylistMainForm
         target.Playing += (_, _) => PostPlayerEvent(target, () =>
         {
             if (currentTrack?.IsNew == true) { currentTrack.IsNew = false; SaveLibrary(); RenderPlaylists(); }
-            status.Text = paused ? "Пауза" : $"Играет: {currentTrack?.Name}";
+            status.Text = paused ? "Пауза" : $"Играет: {currentTrack?.Name} · {PlaybackSource()}";
             UpdateMiniPlayer();
         });
         target.Paused += (_, _) => PostPlayerEvent(target, () => { status.Text = "Пауза"; UpdateMiniPlayer(); });
@@ -203,11 +199,7 @@ public sealed partial class PlaylistMainForm
     {
         var next = GetNextTrack();
         if (next is null) { isCrossfading = false; return; }
-        var output = await RunYtDlpAsync(token, "--no-playlist", "-f", "bestaudio/best", "-g", $"https://www.youtube.com/watch?v={next.Id}");
-        token.ThrowIfCancellationRequested();
-        var url = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(url)) throw new InvalidOperationException("yt-dlp не вернул следующий поток.");
-        incomingMedia = new Media(vlc, new Uri(url));
+        incomingMedia = new Media(vlc, await ResolveAudioAsync(next, token));
         if (settings.NormalizeAudio) incomingMedia.AddOption(":audio-filter=compressor");
         incomingPlayer = new MediaPlayer(vlc) { Volume = 0, Mute = false };
         AttachPlayerEvents(incomingPlayer);
@@ -245,7 +237,7 @@ public sealed partial class PlaylistMainForm
         crossfadeAttemptedTrack = null;
         outgoingPlayer.Dispose();
         RenderPlaylists(true);
-        status.Text = $"Играет: {currentTrack?.Name}";
+        status.Text = $"Играет: {currentTrack?.Name} · {PlaybackSource()}";
         UpdateMiniPlayer();
     }
 

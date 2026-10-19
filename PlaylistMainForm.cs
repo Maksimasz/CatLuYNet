@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json;
 using CatLuYNet.Core;
 using LibVLCSharp.Shared;
@@ -138,7 +138,10 @@ public sealed partial class PlaylistMainForm : Form
         input.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         input.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         input.Controls.Add(urlBox, 0, 0);
-        input.Controls.Add(save, 1, 0);
+        input.ColumnCount = 3;
+        input.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        input.Controls.Add(downloadOnAdd, 1, 0);
+        input.Controls.Add(save, 2, 0);
         var controls = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(5), BackColor = Color.FromArgb(20, 20, 20) };
         var volumeTitle = new Label { Text = "Громкость", AutoSize = true, Padding = new Padding(5, 5, 0, 0), ForeColor = Color.Silver, Tag = "muted" };
         controls.Controls.AddRange([previous, play, pause, stop, next, volumeTitle, volume]);

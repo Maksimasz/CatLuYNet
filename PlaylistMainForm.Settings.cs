@@ -9,7 +9,7 @@ public sealed partial class PlaylistMainForm
 {
     private void ShowSettings()
     {
-        using var dialog = new Form { Text = T("settings"), Size = new Size(430, 540), StartPosition = FormStartPosition.CenterParent, BackColor = surfaceColor, ForeColor = textColor, Padding = new Padding(5), MinimizeBox = false, MaximizeBox = false };
+        using var dialog = new Form { Text = T("settings"), Size = new Size(560, 640), StartPosition = FormStartPosition.CenterParent, BackColor = surfaceColor, ForeColor = textColor, Padding = new Padding(5), MinimizeBox = false, MaximizeBox = false };
         var theme = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
         theme.Items.AddRange(["Системная", "Тёмная", "Светлая", "Apple", "YouTube", "Spotify", "Netflix"]); theme.SelectedIndex = Math.Clamp(settings.Theme, 0, 6);
         var language = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -31,17 +31,32 @@ public sealed partial class PlaylistMainForm
             button.TextAlign = ContentAlignment.MiddleCenter;
         }
         foreach (var button in new[] { import, export }) { button.Dock = DockStyle.Fill; button.Enabled = libraryLoaded; }
-        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 12, Padding = new Padding(5), AutoScroll = true };
+        var grid = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 15, Padding = new Padding(5), AutoScroll = true };
         grid.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 150)); grid.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        for (var i = 0; i < 12; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
+        for (var i = 0; i < 15; i++) grid.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
         grid.Controls.Add(new Label { Text = T("theme"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 0); grid.Controls.Add(theme, 1, 0);
         grid.Controls.Add(new Label { Text = T("language"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft }, 0, 1); grid.Controls.Add(language, 1, 1);
-        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(musicLights, 1, 6); grid.Controls.Add(youtubeLinks, 1, 7); grid.Controls.Add(checkUpdates, 1, 8); grid.Controls.Add(save, 1, 11);
+        grid.Controls.Add(showClock, 1, 2); grid.Controls.Add(showInfo, 1, 3); grid.Controls.Add(normalize, 1, 4); grid.Controls.Add(crossfade, 1, 5); grid.Controls.Add(musicLights, 1, 6); grid.Controls.Add(youtubeLinks, 1, 7); grid.Controls.Add(checkUpdates, 1, 8); grid.Controls.Add(save, 1, 14);
         grid.Controls.Add(import, 0, 9); grid.SetColumnSpan(import, 2);
         grid.Controls.Add(export, 0, 10); grid.SetColumnSpan(export, 2);
+        var folder = new TextBox { Text = settings.DownloadFolder, Dock = DockStyle.Fill };
+        var browse = Button("Папка MP3…", cardColor);
+        browse.AutoSize = false; browse.Dock = DockStyle.Fill; browse.Padding = Padding.Empty; browse.TextAlign = ContentAlignment.MiddleCenter;
+        browse.Click += (_, _) => { using var picker = new FolderBrowserDialog { SelectedPath = folder.Text }; if (picker.ShowDialog(dialog) == DialogResult.OK) folder.Text = picker.SelectedPath; };
+        var quality = new ComboBox { Dock = DockStyle.Fill, DropDownStyle = ComboBoxStyle.DropDownList };
+        string[] qualities = ["0", "320K", "256K", "192K", "128K"];
+        quality.Items.AddRange(["Наилучшее (VBR)", "320 кбит/с", "256 кбит/с", "192 кбит/с", "128 кбит/с"]);
+        quality.SelectedIndex = Math.Max(0, Array.IndexOf(qualities, settings.Mp3Quality));
+        grid.Controls.Add(browse, 0, 11); grid.Controls.Add(folder, 1, 11);
+        grid.Controls.Add(new Label { Text = "Качество MP3", AutoSize = true }, 0, 12); grid.Controls.Add(quality, 1, 12);
+        var folderHint = new Label { Text = "Внутри создаётся папка с названием плейлиста.", Dock = DockStyle.Fill, AutoEllipsis = true };
+        grid.Controls.Add(folderHint, 0, 13); grid.SetColumnSpan(folderHint, 2);
         dialog.Controls.Add(grid);
         save.Click += (_, _) =>
         {
+            try { settings.DownloadFolder = Path.GetFullPath(folder.Text.Trim()); }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException) { MessageBox.Show(dialog, "Укажите корректную папку MP3."); return; }
+            settings.Mp3Quality = qualities[quality.SelectedIndex];
             settings.Theme = theme.SelectedIndex; settings.Language = language.SelectedIndex; settings.ShowClock = showClock.Checked; settings.ShowTrackInfo = showInfo.Checked; settings.NormalizeAudio = normalize.Checked; settings.Crossfade = crossfade.Checked; settings.MusicLights = musicLights.Checked; settings.ShowYoutubeLinks = youtubeLinks.Checked;
             if (SaveSettings()) { ApplySettings(); dialog.Close(); }
         };
@@ -178,7 +193,7 @@ public sealed partial class PlaylistMainForm
     private void UpdateInfo()
     {
         clock.Text = DateTime.Now.ToString("HH:mm");
-        if (settings.ShowTrackInfo && player.IsPlaying && currentTrack is not null) status.Text = $"{T("playing")}: {FormatTime(player.Time)} / {FormatTime(player.Length)} · {currentTrack.Name}";
+        if (settings.ShowTrackInfo && player.IsPlaying && currentTrack is not null) status.Text = $"{T("playing")}: {FormatTime(player.Time)} / {FormatTime(player.Length)} · {currentTrack.Name} · {PlaybackSource()}";
     }
     private static string FormatTime(long milliseconds)
     {
@@ -263,7 +278,7 @@ public sealed partial class PlaylistMainForm
         }
     }
 
-    private sealed class AppSettings { public int Theme { get; set; } = 0; public int Language { get; set; } = 0; public bool ShowClock { get; set; } = false; public bool ShowTrackInfo { get; set; } = false; public bool NormalizeAudio { get; set; } = true; public bool Crossfade { get; set; } = true; public bool MusicLights { get; set; } = false; public bool ShowYoutubeLinks { get; set; } = false; }
+    private sealed class AppSettings { public string DownloadFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyMusic), "CatLu YNet"); public string Mp3Quality { get; set; } = "0"; public int Theme { get; set; } = 0; public int Language { get; set; } = 0; public bool ShowClock { get; set; } = false; public bool ShowTrackInfo { get; set; } = false; public bool NormalizeAudio { get; set; } = true; public bool Crossfade { get; set; } = true; public bool MusicLights { get; set; } = false; public bool ShowYoutubeLinks { get; set; } = false; }
 
     private static readonly Dictionary<string, Dictionary<string, string>> Translations = new()
     {

@@ -1,4 +1,4 @@
-using System.Collections;
+﻿using System.Collections;
 using System.Diagnostics;
 using System.Reflection;
 using System.Text.Json;
@@ -35,6 +35,11 @@ internal static class Program
         {
             TestUrlsAndTime();
             TestReleaseAssets();
+            Check(((string)Call(null, "FormatYtDlpError", "WARNING: initial data\nWARNING: runtime\nERROR: [youtube] id: Video unavailable")!).Contains("видео недоступно"), "download reports actual error after warnings");
+            Check((string)Call(null, "FormatYtDlpError", "WARNING: warning\nERROR: conversion failed")! == "ERROR: conversion failed", "conversion error is preserved");
+            Check(!string.IsNullOrWhiteSpace((string)Call(null, "FormatYtDlpError", "")!), "empty downloader error has explanation");
+            TestLocalAudio(directory);
+            TestEditorButtons(directory, args.Contains("--render-editor"));
             TestSharedCore(directory);
             TestStorage(directory);
             TestPlaylistTransfer(directory);
@@ -68,6 +73,85 @@ internal static class Program
         FormType, PrivateInstance, null, [directory, Path.Combine(directory, "legacy.json")], null)!;
     private static object Model(string name) => Activator.CreateInstance(name == "Playlist" ? typeof(Playlist) : typeof(Track))!;
     private static void Property(object target, string name, object value) => target.GetType().GetProperty(name)!.SetValue(target, value);
+
+    private static void TestEditorButtons(string directory, bool render)
+    {
+        using var owner = NewForm(Path.Combine(directory, "editor-layout"));
+        var type = FormType.GetNestedType("PlaylistEditorDialog", BindingFlags.NonPublic)!;
+        using var editor = (Form)Activator.CreateInstance(type, owner, new Playlist { Name = "Мой плейлист" })!;
+        editor.CreateControl();
+        editor.PerformLayout();
+        var grid = (TableLayoutPanel)editor.Controls[0];
+        var actions = (FlowLayoutPanel)grid.GetControlFromPosition(0, 3)!;
+        foreach (Button button in actions.Controls)
+            Check(button.TextAlign == ContentAlignment.MiddleCenter && button.Padding == Padding.Empty && button.Height == 36, "editor button centered: " + button.Text);
+        if (render)
+        {
+            editor.ShowInTaskbar = false;
+            editor.StartPosition = FormStartPosition.Manual;
+            editor.Location = new Point(-32000, -32000);
+            editor.Show();
+            Application.DoEvents();
+            using var bitmap = new Bitmap(editor.Width, editor.Height);
+            editor.DrawToBitmap(bitmap, new Rectangle(Point.Empty, editor.Size));
+            bitmap.Save(Path.Combine(Environment.CurrentDirectory, ".test-temp", "editor-layout.png"));
+        }
+    }
+
+    private static void TestLocalAudio(string directory)
+    {
+        using var form = NewForm(Path.Combine(directory, "local-audio"));
+        var settings = Get(form, "settings");
+        Check((string)settings.GetType().GetProperty("Mp3Quality")!.GetValue(settings)! == "0", "MP3 defaults to best quality");
+        Check(!((CheckBox)Get(form, "downloadOnAdd")).Checked, "download is opt-in");
+        var folder = Path.Combine(directory, "music");
+        Directory.CreateDirectory(folder);
+        Property(settings, "DownloadFolder", folder);
+        Property(settings, "Mp3Quality", "192K");
+        var playlistFolder = (string)Call(null, "PlaylistDownloadFolder", folder, "Мой плейлист")!;
+        Check(playlistFolder == Path.Combine(folder, "Мой плейлист"), "download uses named playlist subfolder");
+        var safeFolder = (string)Call(null, "PlaylistDownloadFolder", folder, "../CON:bad?")!;
+        Check(Path.GetDirectoryName(safeFolder) == folder && !Path.GetFileName(safeFolder).Contains(':'), "playlist folder stays within chosen root");
+        Check(Path.GetFileName((string)Call(null, "PlaylistDownloadFolder", folder, "CON")!) == "_CON", "reserved playlist folder escaped");
+        var track = new Track { Id = "dQw4w9WgXcQ", Name = "test" };
+        Check(Call(form, "LocalAudio", track) is null, "missing MP3 uses YouTube");
+        var file = Path.Combine(folder, track.Id + ".mp3");
+        File.WriteAllText(file, "fixture");
+        Check((string?)Call(form, "LocalAudio", track) == file, "find MP3 by video ID");
+        var resolved = ((Task<Uri>)Call(form, "ResolveAudioAsync", track, CancellationToken.None)!).GetAwaiter().GetResult();
+        Check(resolved.IsFile && resolved.LocalPath == file, "local source resolves without yt-dlp");
+        Call(form, "LoadLibrary");
+        var duplicate = new Track { Id = track.Id };
+        ((List<Playlist>)Get(form, "playlists")).Add(new Playlist { Name = "duplicate", Tracks = [duplicate] });
+        ((Task)Call(form, "DownloadTrackAsync", track, folder, CancellationToken.None)!).GetAwaiter().GetResult();
+        Check(track.LocalFile == file && duplicate.LocalFile == file, "existing MP3 reused and shared across playlists");
+        using (var cancelled = new CancellationTokenSource())
+        {
+            cancelled.Cancel();
+            try { ((Task<Uri>)Call(form, "ResolveAudioAsync", track, cancelled.Token)!).GetAwaiter().GetResult(); Check(false, "cancelled source resolution"); }
+            catch (OperationCanceledException) { Check(true, "cancelled source resolution"); }
+        }
+        track.LocalFile = file;
+        Property(settings, "DownloadFolder", Path.Combine(directory, "other"));
+        Check((string?)Call(form, "LocalAudio", track) == file, "folder change preserves old files");
+        Check((bool)Call(form, "SaveSettings")!, "MP3 settings saved");
+        var loaded = Call(form, "LoadSettings")!;
+        Check((string)loaded.GetType().GetProperty("Mp3Quality")!.GetValue(loaded)! == "192K", "quality survives settings reload");
+        var library = Path.Combine(directory, "local-library.json");
+        PlaylistStore.Save(library, [new Playlist { Name = "local", Tracks = [track] }]);
+        Check(PlaylistStore.Load(library, library)[0].Tracks[0].LocalFile == file, "MP3 path survives library reload");
+        Property(settings, "DownloadFolder", folder);
+        var namedFolder = (string)Call(null, "PlaylistDownloadFolder", folder, "duplicate")!;
+        Directory.CreateDirectory(namedFolder);
+        var namedFile = Path.Combine(namedFolder, track.Id + ".mp3");
+        File.WriteAllText(namedFile, "fixture");
+        File.Delete(file);
+        Check((string?)Call(form, "LocalAudio", track) == namedFile, "find MP3 inside playlist folder");
+        File.Delete(namedFile);
+        Check(Call(form, "LocalAudio", track) is null, "deleted local file falls back to YouTube");
+        track.Id = "../invalid";
+        Check(Call(form, "LocalAudio", track) is null, "invalid ID cannot escape music folder");
+    }
 
     private static void TestUrlsAndTime()
     {

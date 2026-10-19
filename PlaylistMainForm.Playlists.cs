@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using CatLuYNet.Core;
 
 namespace YouTubeRadio;
@@ -29,6 +29,7 @@ public sealed partial class PlaylistMainForm
         var playlist = new Playlist { Name = title, Expanded = true, SourceUrl = sourceUrl, LastCheckedUtc = DateTime.UtcNow };
         playlist.Tracks.AddRange(await ReadPlaylistAsync(sourceUrl));
         playlists.Add(playlist);
+        if (SaveLibrary() && downloadOnAdd.Checked) await DownloadTracksAsync(playlist, playlist.Tracks);
         return true;
     }
 
@@ -39,6 +40,7 @@ public sealed partial class PlaylistMainForm
         var track = await ReadTrackAsync(urlBox.Text);
         if (playlist.Tracks.All(item => item.Id != track.Id)) playlist.Tracks.Add(track);
         playlist.Expanded = true;
+        if (SaveLibrary() && downloadOnAdd.Checked) await DownloadTracksAsync(playlist, [playlist.Tracks.First(t => t.Id == track.Id)]);
         return true;
     }
 
@@ -142,7 +144,7 @@ public sealed partial class PlaylistMainForm
         var row = new Panel { Left = 0, Top = top, Width = card.Width, Height = height, BackColor = active ? activeColor : cardColor, BorderStyle = active ? BorderStyle.FixedSingle : BorderStyle.None, Cursor = Cursors.Hand };
         var titleHeight = TextRenderer.MeasureText(track.Name, trackFont, new Size(row.Width - 10, int.MaxValue), TextFormatFlags.WordBreak).Height;
         var title = new Label { Text = track.IsNew ? $"{track.Name} · {T("newTrack")}" : track.Name, Left = 5, Top = 5, Width = row.Width - 10, Height = titleHeight, ForeColor = track.IsNew ? accentColor : textColor, Font = trackFont };
-        var artist = new Label { Text = track.Artist, Left = 5, Top = 5 + titleHeight, Width = row.Width - 10, Height = 18, ForeColor = mutedColor };
+        var artist = new Label { Text = $"{track.Artist} · {AudioSource(track)}", Left = 5, Top = 5 + titleHeight, Width = row.Width - 10, Height = 18, ForeColor = mutedColor };
         Label? source = null;
         if (settings.ShowYoutubeLinks) source = new Label { Text = $"https://www.youtube.com/watch?v={track.Id}", Left = 5, Top = artist.Bottom, Width = row.Width - 10, Height = 18, ForeColor = accentColor, Font = linkFont, Cursor = Cursors.Hand };
         EventHandler play = async (_, _) => { Stop(); currentPlaylist = playlist; currentTrack = track; await PlayCurrentAsync(); };

@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text.Json;
 using CatLuYNet.Core;
 
@@ -51,7 +51,9 @@ public sealed partial class PlaylistMainForm
     private static Track ToTrack(JsonElement value) => new() { Id = value.GetProperty("id").GetString() ?? "", Name = value.GetProperty("title").GetString() ?? "Без названия", Artist = value.TryGetProperty("uploader", out var author) ? author.GetString() ?? "YouTube" : "YouTube" };
     private static bool IsYouTubeUrl(string value, out bool playlist) => YouTubeUrl.IsValid(value, out playlist);
     private static string CleanVideoUrl(string value) => YouTubeUrl.CleanVideoUrl(value);
-    private static async Task<string> RunYtDlpAsync(CancellationToken token, params string[] arguments)
+    private static Task<string> RunYtDlpAsync(CancellationToken token, params string[] arguments) => RunYtDlpWithTimeoutAsync(token, TimeSpan.FromMinutes(5), arguments);
+
+    private static async Task<string> RunYtDlpWithTimeoutAsync(CancellationToken token, TimeSpan limit, params string[] arguments)
     {
         var file = Path.Combine(AppContext.BaseDirectory, "tools", "yt-dlp.exe");
         var start = new ProcessStartInfo(file) { WorkingDirectory = AppContext.BaseDirectory, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
@@ -63,21 +65,35 @@ public sealed partial class PlaylistMainForm
         start.ArgumentList.Add("--no-cache-dir");
         foreach (var argument in arguments) start.ArgumentList.Add(argument);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeout.CancelAfter(TimeSpan.FromMinutes(5));
+        timeout.CancelAfter(limit);
         (string Output, string Error, int ExitCode) result;
         try { result = await ReadProcessAsync(start, timeout.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
-            throw new TimeoutException("yt-dlp не завершил запрос за 5 минут.");
+            throw new TimeoutException($"yt-dlp не завершил запрос за {limit.TotalMinutes:0} минут.");
         }
         if (result.ExitCode != 0)
         {
             var log = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CatLuYNet", "yt-dlp-error.log");
             Directory.CreateDirectory(Path.GetDirectoryName(log)!);
             File.WriteAllText(log, result.Error);
-            throw new InvalidOperationException(result.Error.Trim());
+            throw new InvalidOperationException(FormatYtDlpError(result.Error) + Environment.NewLine + "Журнал: " + log);
         }
         return result.Output;
+    }
+
+    private static string FormatYtDlpError(string error)
+    {
+        var lines = error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var reason = lines.LastOrDefault(line => line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
+            ?? lines.LastOrDefault() ?? "yt-dlp завершился с ошибкой без описания.";
+        if (reason.Contains("Video unavailable", StringComparison.OrdinalIgnoreCase))
+            return "YouTube сообщает: видео недоступно. Скачать этот ролик не удалось.";
+        if (reason.Contains("Private video", StringComparison.OrdinalIgnoreCase))
+            return "Видео закрыто: для доступа требуется авторизация в YouTube.";
+        if (reason.Contains("Sign in", StringComparison.OrdinalIgnoreCase))
+            return "YouTube требует входа в аккаунт. Скачать ролик без авторизации не удалось.";
+        return reason;
     }
 
     private static async Task<(string Output, string Error, int ExitCode)> ReadProcessAsync(ProcessStartInfo start, CancellationToken token)

@@ -1,4 +1,4 @@
-using CatLuYNet.Core;
+﻿using CatLuYNet.Core;
 
 namespace YouTubeRadio;
 
@@ -11,13 +11,14 @@ public sealed partial class PlaylistMainForm
         private readonly TextBox name;
         private readonly ListBox tracks;
         private readonly TextBox link;
+        private readonly CheckBox download = new() { Text = "Скачать MP3", AutoSize = true };
 
         public PlaylistEditorDialog(PlaylistMainForm owner, Playlist playlist)
         {
             this.owner = owner;
             this.playlist = playlist;
             Text = $"Плейлист: {playlist.Name}";
-            Size = new Size(620, 540);
+            Size = new Size(620, 620);
             StartPosition = FormStartPosition.CenterParent;
             BackColor = Color.FromArgb(25, 25, 25);
             ForeColor = Color.White;
@@ -44,13 +45,24 @@ public sealed partial class PlaylistMainForm
             var removePlaylist = Button("Удалить весь плейлист", Color.FromArgb(229, 9, 20));
             var close = Button("Готово", Color.FromArgb(55, 55, 55));
             var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 5, 0, 0) };
-            actions.Controls.AddRange([up, down, linkPlaylist, remove, removePlaylist, close]);
+            var downloadOne = Button("Скачать выбранный MP3", Color.FromArgb(55, 55, 55));
+            var downloadAll = Button("Скачать все MP3", Color.FromArgb(55, 55, 55));
+            downloadOne.Click += async (_, _) => { if (tracks.SelectedItem is Track track) { await owner.DownloadTracksAsync(playlist, [track]); tracks.Invalidate(); } };
+            downloadAll.Click += async (_, _) => { await owner.DownloadTracksAsync(playlist, playlist.Tracks.ToList()); tracks.Invalidate(); };
+            foreach (var button in new[] { up, down, linkPlaylist, remove, removePlaylist, downloadOne, downloadAll, close })
+            {
+                button.TextAlign = ContentAlignment.MiddleCenter;
+                button.Padding = Padding.Empty;
+                button.AutoSize = false;
+                button.Size = new Size(Math.Max(38, TextRenderer.MeasureText(button.Text, button.Font).Width + 24), 36);
+            }
+            actions.Controls.AddRange([up, down, linkPlaylist, remove, removePlaylist, downloadOne, downloadAll, close]);
 
             var editor = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Padding = Padding.Empty };
             editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
             editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 42));
             editor.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 58));
+            editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 140));
             var nameRow = new TableLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, ColumnCount = 2, Padding = new Padding(0, 0, 0, 5) };
             nameRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             nameRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -60,7 +72,10 @@ public sealed partial class PlaylistMainForm
             linkRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             linkRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
             linkRow.Controls.Add(link, 0, 0);
-            linkRow.Controls.Add(add, 1, 0);
+            linkRow.ColumnCount = 3;
+            linkRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            linkRow.Controls.Add(download, 1, 0);
+            linkRow.Controls.Add(add, 2, 0);
             rename.Margin = new Padding(5, 0, 0, 0);
             add.Margin = new Padding(5, 0, 0, 0);
             editor.Controls.Add(nameRow, 0, 0);
@@ -104,7 +119,7 @@ public sealed partial class PlaylistMainForm
                 var title = new Rectangle(e.Bounds.X + 42, e.Bounds.Y + 7, e.Bounds.Width - 52, e.Bounds.Height - 28);
                 TextRenderer.DrawText(e.Graphics, $"{e.Index + 1}", tracks.Font, number, Color.FromArgb(180, 180, 180), TextFormatFlags.VerticalCenter | TextFormatFlags.HorizontalCenter);
                 TextRenderer.DrawText(e.Graphics, track.Name, tracks.Font, title, Color.White, TextFormatFlags.WordBreak);
-                TextRenderer.DrawText(e.Graphics, track.Artist, owner.Font, new Rectangle(e.Bounds.X + 42, e.Bounds.Bottom - 23, e.Bounds.Width - 52, 18), Color.Silver, TextFormatFlags.EndEllipsis);
+                TextRenderer.DrawText(e.Graphics, $"{track.Artist} · {owner.AudioSource(track)}", owner.Font, new Rectangle(e.Bounds.X + 42, e.Bounds.Bottom - 23, e.Bounds.Width - 52, 18), Color.Silver, TextFormatFlags.EndEllipsis);
             };
         }
 
@@ -171,7 +186,7 @@ public sealed partial class PlaylistMainForm
                 if (playlist.Tracks.All(item => item.Id != track.Id)) playlist.Tracks.Add(track);
                 link.Clear();
                 RefreshTracks();
-                owner.SaveLibrary();
+                if (owner.SaveLibrary() && download.Checked) await owner.DownloadTracksAsync(playlist, [playlist.Tracks.First(t => t.Id == track.Id)]);
                 owner.RenderPlaylists();
             }
             catch (OperationCanceledException) when (owner.closing) { }

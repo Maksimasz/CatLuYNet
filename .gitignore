@@ -6,3 +6,7 @@ installer/Output/
 *.user
 .repowise/*
 !.repowise/config.yaml
+
+tools/ffmpeg.exe
+tools/ffprobe.exe
+.test-temp/
