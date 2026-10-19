@@ -18,7 +18,10 @@ public sealed partial class PlaylistMainForm
             this.owner = owner;
             this.playlist = playlist;
             Text = $"Плейлист: {playlist.Name}";
-            Size = new Size(620, 620);
+            var workingArea = Screen.FromControl(owner).WorkingArea;
+            MaximumSize = workingArea.Size;
+            MinimumSize = new Size(Math.Min(500, workingArea.Width), Math.Min(420, workingArea.Height));
+            Size = new Size(Math.Min(620, workingArea.Width), Math.Min(620, workingArea.Height));
             StartPosition = FormStartPosition.CenterParent;
             BackColor = Color.FromArgb(25, 25, 25);
             ForeColor = Color.White;
@@ -43,20 +46,34 @@ public sealed partial class PlaylistMainForm
             var linkPlaylist = Button(owner.T("linkPlaylist"), Color.FromArgb(55, 55, 55));
             var remove = Button("Удалить", Color.FromArgb(229, 9, 20));
             var removePlaylist = Button("Удалить весь плейлист", Color.FromArgb(229, 9, 20));
-            var close = Button("Готово", Color.FromArgb(55, 55, 55));
-            var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(0, 5, 0, 0) };
+            var close = Button("Закончить редактирование плейлиста", Color.FromArgb(55, 55, 55));
+            var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = new Padding(0, 5, 0, 0) };
+            actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            for (var i = 0; i < 3; i++) actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
             var downloadOne = Button("Скачать выбранный MP3", Color.FromArgb(55, 55, 55));
             var downloadAll = Button("Скачать все MP3", Color.FromArgb(55, 55, 55));
             downloadOne.Click += async (_, _) => { if (tracks.SelectedItem is Track track) { await owner.DownloadTracksAsync(playlist, [track]); tracks.Invalidate(); } };
             downloadAll.Click += async (_, _) => { await owner.DownloadTracksAsync(playlist, playlist.Tracks.ToList()); tracks.Invalidate(); };
-            foreach (var button in new[] { up, down, linkPlaylist, remove, removePlaylist, downloadOne, downloadAll, close })
+            var deleteMp3 = Button("Удалить MP3 с диска", Color.FromArgb(229, 9, 20));
+            deleteMp3.Click += (_, _) => DeleteSelectedMp3();
+            foreach (var button in new[] { up, down, linkPlaylist, remove, removePlaylist, downloadOne, downloadAll, deleteMp3, close })
             {
                 button.TextAlign = ContentAlignment.MiddleCenter;
                 button.Padding = Padding.Empty;
                 button.AutoSize = false;
-                button.Size = new Size(Math.Max(38, TextRenderer.MeasureText(button.Text, button.Font).Width + 24), 36);
+                button.Dock = DockStyle.Fill;
+                button.Font = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+                button.Margin = new Padding(3);
+                button.Resize += (_, _) => FitActionButton(button);
             }
-            actions.Controls.AddRange([up, down, linkPlaylist, remove, removePlaylist, downloadOne, downloadAll, close]);
+            var playlistActions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 5, RowCount = 1, Margin = Padding.Empty };
+            foreach (var width in new[] { 6f, 6f, 28f, 20f, 40f }) playlistActions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, width));
+            playlistActions.Controls.Add(up, 0, 0); playlistActions.Controls.Add(down, 1, 0);
+            playlistActions.Controls.Add(linkPlaylist, 2, 0); playlistActions.Controls.Add(remove, 3, 0); playlistActions.Controls.Add(removePlaylist, 4, 0);
+            var mp3Actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 1, Margin = Padding.Empty };
+            foreach (var width in new[] { 40f, 27f, 33f }) mp3Actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, width));
+            mp3Actions.Controls.Add(downloadOne, 0, 0); mp3Actions.Controls.Add(downloadAll, 1, 0); mp3Actions.Controls.Add(deleteMp3, 2, 0);
+            actions.Controls.Add(playlistActions, 0, 0); actions.Controls.Add(mp3Actions, 0, 1); actions.Controls.Add(close, 0, 2);
 
             var editor = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4, ColumnCount = 1, Padding = Padding.Empty };
             editor.RowStyles.Add(new RowStyle(SizeType.Absolute, 38));
@@ -94,6 +111,23 @@ public sealed partial class PlaylistMainForm
             close.Click += (_, _) => Close();
         }
 
+        private static void FitActionButton(Button button)
+        {
+            for (var size = 8.5f; size >= 6f; size -= 0.5f)
+            {
+                using var font = new Font("Segoe UI", size, FontStyle.Bold);
+                var text = TextRenderer.MeasureText(button.Text, font);
+                if (size > 6f && (text.Width > button.ClientSize.Width - 8 || text.Height > button.ClientSize.Height - 4)) continue;
+                if (button.Font.Size != size)
+                {
+                    var previous = button.Font;
+                    button.Font = (Font)font.Clone();
+                    previous.Dispose();
+                }
+                break;
+            }
+        }
+
         private void RefreshTracks()
         {
             tracks.DataSource = null;
@@ -121,6 +155,16 @@ public sealed partial class PlaylistMainForm
                 TextRenderer.DrawText(e.Graphics, track.Name, tracks.Font, title, Color.White, TextFormatFlags.WordBreak);
                 TextRenderer.DrawText(e.Graphics, $"{track.Artist} · {owner.AudioSource(track)}", owner.Font, new Rectangle(e.Bounds.X + 42, e.Bounds.Bottom - 23, e.Bounds.Width - 52, 18), Color.Silver, TextFormatFlags.EndEllipsis);
             };
+        }
+
+        private void DeleteSelectedMp3()
+        {
+            if (tracks.SelectedItem is not Track track) return;
+            var path = owner.LocalAudio(track);
+            if (path is null) { MessageBox.Show(this, "Локальный MP3 этого трека не найден.", "Удалить MP3"); return; }
+            if (MessageBox.Show(this, $"Удалить MP3 с диска?\n{path}\n\nСсылка на YouTube останется. Этот файл может использоваться другими плейлистами.", "Удалить MP3", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            try { owner.DeleteLocalAudio(track); tracks.Invalidate(); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { MessageBox.Show(this, ex.Message, "Ошибка удаления MP3", MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         private void RenamePlaylist()

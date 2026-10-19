@@ -19,6 +19,19 @@ public sealed partial class PlaylistMainForm
             .FirstOrDefault(File.Exists);
     }
 
+    private void DeleteLocalAudio(Track track)
+    {
+        var path = LocalAudio(track);
+        if (path is null) return;
+        if (currentTrack?.Id == track.Id || incomingTrack?.Id == track.Id) Stop();
+        File.Delete(path);
+        foreach (var item in playlists.SelectMany(p => p.Tracks).Append(track))
+            if (string.Equals(item.LocalFile, path, StringComparison.OrdinalIgnoreCase)) item.LocalFile = null;
+        if (!SaveLibrary()) throw new IOException("MP3 удалён, но библиотеку сохранить не удалось.");
+        RenderPlaylists();
+        status.Text = "MP3 удалён с диска. Для воспроизведения будет использован YouTube.";
+    }
+
     private string AudioSource(Track? track) => track is not null && LocalAudio(track) is not null ? "MP3 · с диска" : "YouTube";
 
     private string PlaybackSource() => media?.Mrl.StartsWith("file:", StringComparison.OrdinalIgnoreCase) == true ? "MP3 · с диска" : "YouTube";

@@ -82,9 +82,31 @@ internal static class Program
         editor.CreateControl();
         editor.PerformLayout();
         var grid = (TableLayoutPanel)editor.Controls[0];
-        var actions = (FlowLayoutPanel)grid.GetControlFromPosition(0, 3)!;
-        foreach (Button button in actions.Controls)
-            Check(button.TextAlign == ContentAlignment.MiddleCenter && button.Padding == Padding.Empty && button.Height == 36, "editor button centered: " + button.Text);
+        var actions = (TableLayoutPanel)grid.GetControlFromPosition(0, 3)!;
+        Check(actions.RowCount == 3, "editor has three action rows");
+        var firstRow = (TableLayoutPanel)actions.GetControlFromPosition(0, 0)!;
+        Check(firstRow.GetControlFromPosition(3, 0)!.Text == "Удалить" && firstRow.GetControlFromPosition(4, 0)!.Text == "Удалить весь плейлист", "playlist delete buttons adjacent");
+        var mp3Row = (TableLayoutPanel)actions.GetControlFromPosition(0, 1)!;
+        Check(mp3Row.Controls.Count == 3, "MP3 download and delete share one row");
+        Check(actions.GetControlFromPosition(0, 2)!.Text == "Закончить редактирование плейлиста", "finish editing has its own last row");
+        editor.ShowInTaskbar = false;
+        editor.StartPosition = FormStartPosition.Manual;
+        editor.Location = new Point(-32000, -32000);
+        editor.Show();
+        foreach (var width in new[] { 500, 620, 800 })
+        {
+            editor.Width = width;
+            Application.DoEvents();
+            foreach (Button button in firstRow.Controls.Cast<Button>().Concat(mp3Row.Controls.Cast<Button>()).Append((Button)actions.GetControlFromPosition(0, 2)!))
+            {
+                Check(button.TextAlign == ContentAlignment.MiddleCenter && button.Padding == Padding.Empty, "centered action: " + button.Text);
+                var text = TextRenderer.MeasureText(button.Text, button.Font);
+                Check(text.Width <= button.ClientSize.Width && text.Height <= button.ClientSize.Height, "action text fits at " + width + ": " + button.Text);
+                Check(button.Left >= 0 && button.Right <= button.Parent!.ClientSize.Width, "action stays inside row: " + button.Text);
+            }
+        }
+        editor.Width = 620;
+        Application.DoEvents();
         if (render)
         {
             editor.ShowInTaskbar = false;
@@ -147,7 +169,12 @@ internal static class Program
         File.WriteAllText(namedFile, "fixture");
         File.Delete(file);
         Check((string?)Call(form, "LocalAudio", track) == namedFile, "find MP3 inside playlist folder");
-        File.Delete(namedFile);
+        track.LocalFile = namedFile;
+        duplicate.LocalFile = namedFile;
+        Call(form, "DeleteLocalAudio", track);
+        Check(track.LocalFile is null && duplicate.LocalFile is null, "delete MP3 clears shared file references");
+        Check(!File.Exists(namedFile), "delete MP3 removes local file");
+        Check(((List<Playlist>)Get(form, "playlists"))[0].Tracks.Contains(duplicate), "delete MP3 preserves playlist track");
         Check(Call(form, "LocalAudio", track) is null, "deleted local file falls back to YouTube");
         track.Id = "../invalid";
         Check(Call(form, "LocalAudio", track) is null, "invalid ID cannot escape music folder");
