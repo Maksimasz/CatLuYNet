@@ -12,11 +12,18 @@ public sealed partial class PlaylistMainForm
         if (!YouTubeUrl.IsVideoId(track.Id)) return null;
         if (!string.IsNullOrWhiteSpace(track.LocalFile) && File.Exists(track.LocalFile)) return track.LocalFile;
         if (string.IsNullOrWhiteSpace(settings.DownloadFolder)) return null;
-        var path = Path.Combine(settings.DownloadFolder, track.Id + ".mp3");
-        if (File.Exists(path)) return path;
-        return playlists.Where(p => p.Tracks.Any(t => t.Id == track.Id))
-            .Select(p => Path.Combine(PlaylistDownloadFolder(settings.DownloadFolder, p.Name), track.Id + ".mp3"))
+        var folders = new[] { settings.DownloadFolder }.Concat(playlists.Where(p => p.Tracks.Any(t => t.Id == track.Id))
+            .Select(p => PlaylistDownloadFolder(settings.DownloadFolder, p.Name)));
+        return folders.SelectMany(folder => new[] { Path.Combine(folder, Mp3FileName(track)), Path.Combine(folder, track.Id + ".mp3") })
             .FirstOrDefault(File.Exists);
+    }
+
+    private static string Mp3FileName(Track track)
+    {
+        if (!YouTubeUrl.IsVideoId(track.Id)) throw new ArgumentException("Некорректный ID трека.");
+        var title = string.IsNullOrWhiteSpace(track.Name) ? "Трек" : track.Name;
+        var safeTitle = PlaylistFileName(title[..Math.Min(title.Length, 140)])[..^5];
+        return $"{safeTitle} [{track.Id}].mp3";
     }
 
     private void DeleteLocalAudio(Track track)
@@ -102,17 +109,59 @@ public sealed partial class PlaylistMainForm
             }
             catch (OperationCanceledException) { }
             catch (Exception ex) { if (!closing) MessageBox.Show(dialog, ex.Message, "Ошибка скачивания", MessageBoxButtons.OK, MessageBoxIcon.Error); }
-            finally { finished = true; if (!closing) { RenderPlaylists(); status.Text = $"MP3 сохранено: {saved}; ошибок: {failed.Count} · {folder}"; } dialog.Close(); }
+            finally { finished = true; if (!closing) { RenderPlaylists(); UpdateMiniPlayer(); status.Text = $"MP3 сохранено: {saved}; ошибок: {failed.Count} · {folder}"; } dialog.Close(); }
         };
         dialog.ShowDialog(this);
         return Task.CompletedTask;
+    }
+
+    private static void AddWindowsMp3Tags(string path, string youtubeUrl)
+    {
+        // Проводник читает URL и звёзды из WOAR и POPM, которые FFmpeg не записывает.
+        using var frames = new MemoryStream();
+        void Frame(string id, byte[] payload)
+        {
+            var frameHeader = new byte[10];
+            System.Text.Encoding.ASCII.GetBytes(id).CopyTo(frameHeader, 0);
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32BigEndian(frameHeader.AsSpan(4, 4), payload.Length);
+            frames.Write(frameHeader); frames.Write(payload);
+        }
+        Frame("WOAR", System.Text.Encoding.ASCII.GetBytes(youtubeUrl));
+        Frame("POPM", [.. System.Text.Encoding.ASCII.GetBytes("Windows Media Player 9 Series\0"), 255, 0, 0, 0, 0]);
+        var rewritten = path + ".tags";
+        var created = false;
+        try
+        {
+            using (var source = File.OpenRead(path))
+            {
+                var header = new byte[10];
+                source.ReadExactly(header);
+                if (!header.AsSpan(0, 3).SequenceEqual("ID3"u8) || header[3] != 3 || header[5] != 0 || header.AsSpan(6, 4).ContainsAnyInRange((byte)128, (byte)255))
+                    throw new InvalidDataException("Ожидался MP3 с обычным тегом ID3v2.3.");
+                var oldSize = (header[6] << 21) | (header[7] << 14) | (header[8] << 7) | header[9];
+                if (oldSize > source.Length - 10 || oldSize + frames.Length >= 1L << 28)
+                    throw new InvalidDataException("Некорректный размер MP3-тегов.");
+                var size = oldSize + (int)frames.Length;
+                for (var i = 9; i >= 6; i--) { header[i] = (byte)(size & 127); size >>= 7; }
+                using var output = new FileStream(rewritten, FileMode.CreateNew, FileAccess.Write);
+                created = true;
+                output.Write(header);
+                frames.Position = 0;
+                frames.CopyTo(output);
+                source.CopyTo(output);
+                output.Flush(true);
+            }
+            File.Move(rewritten, path, true);
+        }
+        finally { if (created && File.Exists(rewritten)) File.Delete(rewritten); }
     }
 
     private async Task DownloadTrackAsync(Track track, string folder, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
         if (!YouTubeUrl.IsVideoId(track.Id)) throw new InvalidOperationException("Некорректный ID трека.");
-        var destination = Path.Combine(folder, track.Id + ".mp3");
+        var legacy = Path.Combine(folder, track.Id + ".mp3");
+        var destination = File.Exists(legacy) ? legacy : Path.Combine(folder, Mp3FileName(track));
         if (!File.Exists(destination))
         {
             var tools = Path.Combine(AppContext.BaseDirectory, "tools");
@@ -122,10 +171,15 @@ public sealed partial class PlaylistMainForm
             Directory.CreateDirectory(temporary);
             try
             {
-                await RunYtDlpWithTimeoutAsync(token, TimeSpan.FromHours(2), "--no-playlist", "-f", "bestaudio/best", "-x", "--audio-format", "mp3", "--audio-quality", settings.Mp3Quality, "--ffmpeg-location", tools, "--no-progress", "-o", Path.Combine(temporary.Replace("%", "%%"), "audio.%(ext)s"), $"https://www.youtube.com/watch?v={track.Id}");
+                await RunYtDlpWithTimeoutAsync(token, TimeSpan.FromHours(2), "--no-playlist", "-f", "bestaudio/best", "-x", "--audio-format", "mp3", "--audio-quality", settings.Mp3Quality,
+                    "--embed-metadata", "--embed-thumbnail", "--convert-thumbnails", "jpg",
+                    "--parse-metadata", "%(album_artist,artist,creator,uploader|)s:%(meta_album_artist)s",
+                    "--parse-metadata", "%(webpage_url)s\n%(channel_url,uploader_url|)s\n%(description|)s:(?s)(?P<meta_comment>.+)",
+                    "--ffmpeg-location", tools, "--no-progress", "-o", Path.Combine(temporary.Replace("%", "%%"), "audio.%(ext)s"), $"https://www.youtube.com/watch?v={track.Id}");
                 token.ThrowIfCancellationRequested();
                 var result = Path.Combine(temporary, "audio.mp3");
                 if (!File.Exists(result) || new FileInfo(result).Length == 0) throw new IOException("MP3 не создан.");
+                AddWindowsMp3Tags(result, $"https://www.youtube.com/watch?v={track.Id}");
                 File.Move(result, destination, false);
             }
             finally { try { Directory.Delete(temporary, true); } catch (IOException) { } catch (UnauthorizedAccessException) { } }

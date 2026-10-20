@@ -1,4 +1,4 @@
-namespace YouTubeRadio;
+﻿namespace YouTubeRadio;
 
 public sealed partial class PlaylistMainForm
 {
@@ -91,6 +91,7 @@ public sealed partial class PlaylistMainForm
         if (miniTrackTitle is not null)
             miniTrackTitle.Text = currentTrack is null ? "Ничего не воспроизводится" : $"{currentTrack.Name} — {currentTrack.Artist}";
         if (miniPlayButton is not null) miniPlayButton.Text = paused || !player.IsPlaying ? "▶" : "❚❚";
+        if (!closing && IsHandleCreated && (settings.MusicLights || miniPlayerForm is not null)) StartDancingCat();
     }
 
     private static Button MiniButton(string text, Color color) => new()

@@ -38,8 +38,10 @@ internal static class Program
             Check(((string)Call(null, "FormatYtDlpError", "WARNING: initial data\nWARNING: runtime\nERROR: [youtube] id: Video unavailable")!).Contains("видео недоступно"), "download reports actual error after warnings");
             Check((string)Call(null, "FormatYtDlpError", "WARNING: warning\nERROR: conversion failed")! == "ERROR: conversion failed", "conversion error is preserved");
             Check(!string.IsNullOrWhiteSpace((string)Call(null, "FormatYtDlpError", "")!), "empty downloader error has explanation");
+            TestWindowsMp3Tags(directory);
             TestLocalAudio(directory);
             TestEditorButtons(directory, args.Contains("--render-editor"));
+            TestArtwork(directory);
             TestSharedCore(directory);
             TestStorage(directory);
             TestPlaylistTransfer(directory);
@@ -73,6 +75,83 @@ internal static class Program
         FormType, PrivateInstance, null, [directory, Path.Combine(directory, "legacy.json")], null)!;
     private static object Model(string name) => Activator.CreateInstance(name == "Playlist" ? typeof(Playlist) : typeof(Track))!;
     private static void Property(object target, string name, object value) => target.GetType().GetProperty(name)!.SetValue(target, value);
+
+    private static void TestArtwork(string directory)
+    {
+        var covered = Path.Combine(directory, "covered.mp3");
+        var bare = Path.Combine(directory, "bare.mp3");
+        var ffmpeg = Path.Combine(AppContext.BaseDirectory, "tools", "ffmpeg.exe");
+        void Generate(params string[] args)
+        {
+            var start = new ProcessStartInfo(ffmpeg) { UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var arg in args) start.ArgumentList.Add(arg);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+            var result = ((Task<(string Output, string Error, int ExitCode)>)Call(null, "ReadProcessAsync", start, timeout.Token)!).GetAwaiter().GetResult();
+            Check(result.ExitCode == 0, "artwork fixture generated: " + result.Error);
+        }
+        void Pump(Task task)
+        {
+            var wait = Stopwatch.StartNew();
+            while (!task.IsCompleted && wait.Elapsed < TimeSpan.FromSeconds(20)) { Application.DoEvents(); Thread.Sleep(10); }
+            Check(task.IsCompleted, "artwork request finishes");
+            task.GetAwaiter().GetResult();
+        }
+        Generate("-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "sine=duration=0.2", "-f", "lavfi", "-i", "color=blue:s=64x32", "-map", "0:a", "-map", "1:v", "-c:a", "libmp3lame", "-c:v", "mjpeg", "-frames:v", "1", "-disposition:v", "attached_pic", "-id3v2_version", "3", covered);
+        Generate("-hide_banner", "-loglevel", "error", "-i", covered, "-map", "0:a", "-c:a", "copy", bare);
+        var read = (Task<Image?>)Call(null, "ReadTrackArtworkAsync", covered, CancellationToken.None)!;
+        Pump(read);
+        using var image = read.Result;
+        Check(image is not null && image.Width == image.Height * 2, "embedded cover loaded with original aspect ratio");
+        var missing = (Task<Image?>)Call(null, "ReadTrackArtworkAsync", bare, CancellationToken.None)!;
+        Pump(missing);
+        Check(missing.Result is null, "MP3 without cover keeps cat fallback");
+        using var form = NewForm(Path.Combine(directory, "cover-form"));
+        var picture = (PictureBox)Get(form, "trackArtwork");
+        Check(picture.SizeMode == PictureBoxSizeMode.Zoom, "cover uses proportional zoom");
+        var stale = (Task)Call(form, "LoadTrackArtworkAsync", covered, (int)Get(form, "artworkVersion") - 1, CancellationToken.None)!;
+        Pump(stale);
+        Check(picture.Image is null, "obsolete track artwork ignored");
+        var current = (Task)Call(form, "LoadTrackArtworkAsync", covered, (int)Get(form, "artworkVersion"), CancellationToken.None)!;
+        Pump(current);
+        Check(picture.Image is not null && !((MediaPlayer)Get(form, "catPlayer")).IsPlaying, "cover replaces cat video");
+        Call(form, "ClearTrackArtwork");
+        Check(picture.Image is null && !picture.Visible, "cover cleared on reset");
+        File.Delete(covered);
+        Check(!File.Exists(covered), "cover display does not lock MP3 file");
+    }
+
+    private static void TestWindowsMp3Tags(string directory)
+    {
+        var file = Path.Combine(directory, "windows-tags.mp3");
+        byte[] original = [73, 68, 51, 3, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 255, 251, 144, 100];
+        File.WriteAllBytes(file, original);
+        const string url = "https://www.youtube.com/watch?v=abcdefghijk";
+        Call(null, "AddWindowsMp3Tags", file, url);
+        var result = File.ReadAllBytes(file);
+        Check(System.Text.Encoding.ASCII.GetString(result, 10, 4) == "WOAR", "MP3 has native author URL frame");
+        var urlSize = System.Buffers.Binary.BinaryPrimitives.ReadInt32BigEndian(result.AsSpan(14, 4));
+        Check(System.Text.Encoding.ASCII.GetString(result, 20, urlSize) == url, "author URL points to YouTube video");
+        var ratingOffset = 20 + urlSize;
+        Check(System.Text.Encoding.ASCII.GetString(result, ratingOffset, 4) == "POPM", "MP3 has native rating frame");
+        var ratingPayload = ratingOffset + 10;
+        var emailEnd = Array.IndexOf(result, (byte)0, ratingPayload);
+        Check(result[emailEnd + 1] == 255, "MP3 Windows rating is five stars");
+        Check(result.AsSpan(result.Length - original.Length + 10).SequenceEqual(original.AsSpan(10)), "original metadata and audio bytes preserved");
+        var size = (result[6] << 21) | (result[7] << 14) | (result[8] << 7) | result[9];
+        Check(size == result.Length - 14, "ID3 size accounts for added frames");
+        Check(!System.Text.Encoding.ASCII.GetString(result).Contains("OWNR"), "no ownership tag added");
+        original[3] = 4;
+        File.WriteAllBytes(file, original);
+        try { Call(null, "AddWindowsMp3Tags", file, url); Check(false, "reject unsupported ID3 layout"); }
+        catch (InvalidDataException) { Check(File.ReadAllBytes(file).SequenceEqual(original), "unsupported MP3 remains unchanged"); }
+        if (File.Exists(Path.Combine(Environment.CurrentDirectory, ".test-temp", "mp3-tags", "tagged.mp3")))
+        {
+            var real = Path.Combine(directory, "real-tags.mp3");
+            File.Copy(Path.Combine(Environment.CurrentDirectory, ".test-temp", "mp3-tags", "tagged.mp3"), real);
+            Call(null, "AddWindowsMp3Tags", real, url);
+            File.Copy(real, Path.Combine(Environment.CurrentDirectory, ".test-temp", "mp3-tags", "windows-tags.mp3"), true);
+        }
+    }
 
     private static void TestEditorButtons(string directory, bool render)
     {
@@ -137,6 +216,12 @@ internal static class Program
         Check(Path.GetFileName((string)Call(null, "PlaylistDownloadFolder", folder, "CON")!) == "_CON", "reserved playlist folder escaped");
         var track = new Track { Id = "dQw4w9WgXcQ", Name = "test" };
         Check(Call(form, "LocalAudio", track) is null, "missing MP3 uses YouTube");
+        Check((string)Call(null, "Mp3FileName", track)! == "test [dQw4w9WgXcQ].mp3", "MP3 filename includes track title");
+        var titledTrack = new Track { Id = "abcdefghijk", Name = "Осень / סתיו: Песня?" };
+        var titledName = (string)Call(null, "Mp3FileName", titledTrack)!;
+        Check(titledName == "Осень _ סתיו_ Песня_ [abcdefghijk].mp3", "MP3 title keeps Unicode and escapes Windows characters");
+        Check(titledName != (string)Call(null, "Mp3FileName", new Track { Id = track.Id, Name = titledTrack.Name })!, "same titles use distinct filenames");
+        Check(((string)Call(null, "Mp3FileName", new Track { Id = track.Id, Name = new string('я', 400) })!).Length < 180, "long MP3 title is bounded");
         var file = Path.Combine(folder, track.Id + ".mp3");
         File.WriteAllText(file, "fixture");
         Check((string?)Call(form, "LocalAudio", track) == file, "find MP3 by video ID");
@@ -162,6 +247,13 @@ internal static class Program
         var library = Path.Combine(directory, "local-library.json");
         PlaylistStore.Save(library, [new Playlist { Name = "local", Tracks = [track] }]);
         Check(PlaylistStore.Load(library, library)[0].Tracks[0].LocalFile == file, "MP3 path survives library reload");
+        var titledPath = Path.Combine(folder, titledName);
+        File.WriteAllText(titledPath, "fixture");
+        ((Task)Call(form, "DownloadTrackAsync", titledTrack, folder, CancellationToken.None)!).GetAwaiter().GetResult();
+        Check(titledTrack.LocalFile == titledPath, "download uses titled MP3 path without overwriting existing file");
+        titledTrack.LocalFile = null;
+        Property(settings, "DownloadFolder", folder);
+        Check((string?)Call(form, "LocalAudio", titledTrack) == titledPath, "titled MP3 is found without stored path");
         Property(settings, "DownloadFolder", folder);
         var namedFolder = (string)Call(null, "PlaylistDownloadFolder", folder, "duplicate")!;
         Directory.CreateDirectory(namedFolder);

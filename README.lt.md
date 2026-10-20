@@ -24,6 +24,8 @@
 - Pasirenkamas vieno kūrinio arba viso grojaraščio atsisiuntimas MP3 formatu.
 - Atsisiuntimo aplanko ir MP3 kokybės pasirinkimas; numatytoji kokybė — geriausia VBR.
 - Atkuriant ir sklandžiai pereinant tarp kūrinių pirmenybė teikiama vietiniam failui. Jei jo nėra, naudojamas „YouTube“.
+- Naujų MP3 failų pavadinimuose yra kūrinio pavadinimas; į failą įrašomi prieinami metaduomenys, šaltinio nuorodos ir viršelis. „Windows“ savybėse rodoma „YouTube“ nuoroda ir penkių žvaigždučių įvertinimas.
+- Įjungus vizualizaciją, vietinio MP3 viršelis rodomas vietoje katino; jei viršelio nėra, lieka katinas.
 - Ankstesnio kūrinio, atkūrimo, pauzės, sustabdymo, kito kūrinio ir garsumo valdikliai.
 - Išvaizdos temos, rusų, anglų, hebrajų ir lietuvių sąsajos, laikrodis, kūrinio informacija ir mažasis grotuvas.
 - Atnaujinimų tikrinimas paleidžiant programą ir kas 24 valandas.

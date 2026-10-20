@@ -1,5 +1,5 @@
 #define AppName "CatLu YNet"
-#define AppVersion "1.1.9"
+#define AppVersion "1.1.10"
 #define AppPublisher "CatLu"
 #define AppExeName "YouTubeRadio.exe"
 

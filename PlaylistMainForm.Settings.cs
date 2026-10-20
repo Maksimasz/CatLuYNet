@@ -226,7 +226,7 @@ public sealed partial class PlaylistMainForm
         }
     }
 
-    private void StartDancingCat()
+    private void PlayDancingCat()
     {
         try
         {
@@ -244,6 +244,7 @@ public sealed partial class PlaylistMainForm
 
     private void StopDancingCat()
     {
+        ClearTrackArtwork();
         catPlayer.Stop();
         catMedia?.Dispose();
         catMedia = null;
@@ -257,7 +258,7 @@ public sealed partial class PlaylistMainForm
         {
             BeginInvoke((Action)(() =>
             {
-                if (!closing && (settings.MusicLights || miniPlayerForm is not null) && catMedia is not null) catPlayer.Play(catMedia);
+                if (!closing && (settings.MusicLights || miniPlayerForm is not null) && catMedia is not null && trackArtwork.Image is null) catPlayer.Play(catMedia);
             }));
         }
         catch (InvalidOperationException) when (closing || !IsHandleCreated) { }

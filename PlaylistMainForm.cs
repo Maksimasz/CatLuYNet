@@ -160,6 +160,7 @@ public sealed partial class PlaylistMainForm : Form
         bottom.Controls.Add(visualizer, 0, 0);
         bottom.Controls.Add(controlRow, 0, 1);
         bottom.Controls.Add(statusRow, 0, 2);
+        catVideoHost.Controls.Add(trackArtwork);
         visualizer.Controls.Add(catVideoHost);
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 5, ColumnCount = 1, BackColor = BackColor };
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 52));

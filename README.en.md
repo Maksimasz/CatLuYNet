@@ -24,6 +24,8 @@ CatLu YNet plays audio from YouTube videos and playlists without video or a brow
 - Optionally download one track or an entire playlist as MP3.
 - Choose the download folder and MP3 quality; the default is best-quality VBR.
 - Local files take priority during playback and crossfade. If a file is missing, the player uses YouTube.
+- New MP3 filenames include the track title; available metadata, source links and cover art are embedded in the file. Windows properties show a YouTube URL and a five-star rating.
+- With the visualizer enabled, local MP3 cover art replaces the cat; the cat remains when no cover is available.
 - Previous, play, pause, stop, next and volume controls.
 - Themes, Russian, English, Hebrew and Lithuanian interfaces, clock, track information and a mini player.
 - Update checks at startup and every 24 hours.
