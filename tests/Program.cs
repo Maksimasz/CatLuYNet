@@ -29,10 +29,17 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
+        System.Globalization.CultureInfo.CurrentUICulture = System.Globalization.CultureInfo.GetCultureInfo("ru");
         var directory = Path.Combine(Path.GetTempPath(), "ynet-tests-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
         try
         {
+            if (args.Contains("--localization-only"))
+            {
+                TestLocalization(directory);
+                Console.WriteLine($"PASS: {checks} localization checks");
+                return 0;
+            }
             TestUrlsAndTime();
             TestReleaseAssets();
             Check(((string)Call(null, "FormatYtDlpError", "WARNING: initial data\nWARNING: runtime\nERROR: [youtube] id: Video unavailable")!).Contains("видео недоступно"), "download reports actual error after warnings");
@@ -43,10 +50,12 @@ internal static class Program
             TestEditorButtons(directory, args.Contains("--render-editor"));
             TestArtwork(directory);
             TestSharedCore(directory);
+            TestTrackDuplicates(directory);
             TestStorage(directory);
             TestPlaylistTransfer(directory);
             TestPlaylistExportSelection(directory);
             TestPlaybackAndControls(directory);
+            TestLocalization(directory);
             // No WinForms continuation is needed by the subprocess checks.
             SynchronizationContext.SetSynchronizationContext(null);
             TestProcessAsync(directory).GetAwaiter().GetResult();
@@ -55,6 +64,110 @@ internal static class Program
         }
         catch (Exception ex) { Console.Error.WriteLine(ex); return 1; }
         finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    private static void TestLocalization(string directory)
+    {
+        var originalCulture = System.Globalization.CultureInfo.CurrentUICulture;
+        var translations = (Dictionary<string, Dictionary<string, string>>)FormType
+            .GetField("Translations", BindingFlags.Static | BindingFlags.NonPublic)!.GetValue(null)!;
+        var keys = translations["ru"].Keys.ToHashSet();
+        foreach (var (language, texts) in translations)
+        {
+            Check(keys.SetEquals(texts.Keys), "complete translation catalog: " + language);
+            foreach (var (key, text) in texts)
+            {
+                Check(!string.IsNullOrWhiteSpace(text), "nonempty translation: " + language + "/" + key);
+                var format = System.Text.CompositeFormat.Parse(text);
+                Check(format.MinimumArgumentCount == System.Text.CompositeFormat.Parse(translations["ru"][key]).MinimumArgumentCount,
+                    "matching format arguments: " + language + "/" + key);
+                Check(language == "ru" || !text.Any(c => c is >= '\u0400' and <= '\u04ff'),
+                    "no Russian fallback: " + language + "/" + key);
+            }
+        }
+
+        static IEnumerable<Control> Descendants(Control parent) => parent.Controls.Cast<Control>()
+            .SelectMany(child => new[] { child }.Concat(Descendants(child)));
+        try
+        {
+            using var form = NewForm(Path.Combine(directory, "translations"));
+            var settings = Get(form, "settings");
+            for (var index = 1; index <= 4; index++)
+            {
+                var code = new[] { "ru", "en", "he", "lt" }[index - 1];
+                var texts = translations[code];
+                Property(settings, "Language", index);
+                Call(form, "ApplySettings");
+                Check(((CheckBox)Get(form, "downloadOnAdd")).Text == texts["downloadMp3"], "main checkbox switches: " + code);
+                Check(((Label)Get(form, "status")).Text == texts["ready"], "existing status switches: " + code);
+                Check((string)Call(form, "T", "checkUpdates")! == texts["checkUpdates"], "update action translated: " + code);
+                Check(((string)Call(null, "FormatYtDlpError", "ERROR: Video unavailable")!) == texts["videoUnavailable"],
+                    "downloader errors follow language: " + code);
+                Check((string)Call(null, "TextForLanguage", "fr", "save")! == translations["en"]["save"], "unsupported language uses English");
+                var type = FormType.GetNestedType("PlaylistEditorDialog", BindingFlags.NonPublic)!;
+                var playlist = new Playlist { Name = "User title עברית", Tracks = [new Track { Id = "dQw4w9WgXcQ", Name = "User song" }] };
+                using var editor = (Form)Activator.CreateInstance(type, form, playlist)!;
+                Check(editor.Text == string.Format(texts["playlist"], playlist.Name), "editor title preserves user data: " + code);
+                Check(editor.RightToLeft == (code == "he" ? RightToLeft.Yes : RightToLeft.No), "editor text direction: " + code);
+                Check(Descendants(editor).OfType<Button>().Any(button => button.Text == texts["downloadSelectedMp3"]),
+                    "download action translated: " + code);
+                Check(code == "ru" || Descendants(editor).All(control => !control.Text.Any(c => c is >= '\u0400' and <= '\u04ff')),
+                    "editor has no Russian UI: " + code);
+                Check(playlist.Name == "User title עברית" && playlist.Tracks[0].Name == "User song", "language does not change library data: " + code);
+                editor.ShowInTaskbar = false;
+                editor.StartPosition = FormStartPosition.Manual;
+                editor.Location = new Point(-32000, -32000);
+                editor.Show();
+                foreach (var width in new[] { 500, 620 })
+                {
+                    editor.Width = width;
+                    Application.DoEvents();
+                    foreach (var button in Descendants(editor).OfType<Button>())
+                    {
+                        var measured = TextRenderer.MeasureText(button.Text, button.Font);
+                        Check(measured.Width <= button.ClientSize.Width && measured.Height <= button.ClientSize.Height,
+                            "translated editor button fits: " + code + "/" + width + "/" + button.Text);
+                    }
+                }
+                if (Environment.GetCommandLineArgs().Contains("--render-localization"))
+                {
+                    var output = Path.Combine(Environment.CurrentDirectory, ".test-temp", "localization");
+                    Directory.CreateDirectory(output);
+                    using var image = new Bitmap(editor.Width, editor.Height);
+                    editor.DrawToBitmap(image, new Rectangle(Point.Empty, editor.Size));
+                    image.Save(Path.Combine(output, "editor-" + code + ".png"));
+                }
+                editor.Hide();
+                Exception? dialogError = null;
+                using var timer = new System.Windows.Forms.Timer { Interval = 50 };
+                timer.Tick += (_, _) =>
+                {
+                    timer.Stop();
+                    var dialog = Application.OpenForms.Cast<Form>().Last();
+                    try
+                    {
+                        Check(dialog.Text == texts["settings"], "settings title: " + code);
+                        Check(Descendants(dialog).Any(control => control.Text == texts["mp3Quality"]), "MP3 quality translated: " + code);
+                        Check(Descendants(dialog).OfType<ComboBox>().Any(combo => combo.Items.Contains(texts["bitrate128"])), "bitrate choices translated: " + code);
+                        Check(dialog.RightToLeft == (code == "he" ? RightToLeft.Yes : RightToLeft.No), "settings text direction: " + code);
+                        if (Environment.GetCommandLineArgs().Contains("--render-localization"))
+                        {
+                            var output = Path.Combine(Environment.CurrentDirectory, ".test-temp", "localization");
+                            Directory.CreateDirectory(output);
+                            using var image = new Bitmap(dialog.Width, dialog.Height);
+                            dialog.DrawToBitmap(image, new Rectangle(Point.Empty, dialog.Size));
+                            image.Save(Path.Combine(output, "settings-" + code + ".png"));
+                        }
+                    }
+                    catch (Exception ex) { dialogError = ex; }
+                    finally { dialog.Close(); }
+                };
+                timer.Start();
+                Call(form, "ShowSettings");
+                if (dialogError is not null) throw dialogError;
+            }
+        }
+        finally { System.Globalization.CultureInfo.CurrentUICulture = originalCulture; }
     }
 
     private static object? Call(object? target, string method, params object?[] args)
@@ -313,6 +426,52 @@ internal static class Program
         Check(!updateLink.Visible, "update link stays hidden when no new release is found");
         Call(form, "SetUpdateLinkText", "Доступно обновление 1.2.0");
         Check(updateLink.LinkArea.Start == 0 && updateLink.LinkArea.Length == updateLink.Text.Length, "entire available version label is clickable");
+    }
+
+    private static void TestTrackDuplicates(string root)
+    {
+        using var form = NewForm(Path.Combine(root, "duplicates"));
+        var first = new Playlist { Name = "First", Tracks = [new Track { Id = "dQw4w9WgXcQ", Name = "  Same title  " }] };
+        var selected = new Playlist { Name = "Selected" };
+        var library = (List<Playlist>)Get(form, "playlists");
+        library.AddRange([first, selected]);
+        Check(ReferenceEquals(Call(form, "FindTrackPlaylist", "dQw4w9WgXcQ"), first), "link duplicates are found in other playlists");
+        Check(Call(form, "FindTrackPlaylist", "abcdefghijk") is null, "different video ID is allowed");
+        Check(Call(form, "FindTrackPlaylist", "DQw4w9WgXcQ") is null, "YouTube IDs remain case sensitive");
+        foreach (var url in new[] { "https://youtu.be/dQw4w9WgXcQ?t=10", "https://youtube.com/shorts/dQw4w9WgXcQ", "https://youtube.com/watch?v=dQw4w9WgXcQ&list=PL123" })
+            Check(YouTubeUrl.CleanVideoUrl(url) == "https://www.youtube.com/watch?v=" + first.Tracks[0].Id, "URL variants resolve to same duplicate ID");
+        Check((bool)Call(null, "HasSameTrackName", first, "same TITLE")!, "title matching ignores case and surrounding spaces");
+        Check(!(bool)Call(null, "HasSameTrackName", selected, "Same title")!, "title matching is limited to selected playlist");
+        Check(!(bool)Call(null, "HasSameTrackName", first, "Different title")!, "different title does not warn");
+        Check(!(bool)Call(null, "HasSameTrackName", first, " ")!, "blank title does not warn");
+        Check(first.Tracks.Count == 1 && selected.Tracks.Count == 0, "duplicate checks do not modify library");
+        var remix = "In The Army Now (Club House Remix 2026) | Dance Pop & Eurodance Vibes";
+        var official = "Captain Jack - In The Army Now 2017 [Official Video HD]";
+        first.Tracks[0].Name = remix;
+        Check((bool)Call(null, "HasSameTrackName", first, official)!, "reported remix and official video warn as same song");
+        first.Tracks[0].Name = official;
+        Check((bool)Call(null, "HasSameTrackName", first, remix)!, "song comparison works in reverse order");
+        Check((bool)Call(null, "HasSameTrackName", first, "Captain Jack — IN  THE\u00a0ARMY NOW (Live)")!, "song comparison handles dash variants, whitespace and version labels");
+        Check(!(bool)Call(null, "HasSameTrackName", first, "In The Army Tomorrow")!, "sharing some words is not enough to warn");
+        Check(!(bool)Call(null, "HasSameTrackName", first, "(Official Video)")!, "empty normalized titles do not warn");
+        foreach (var title in new[]
+        {
+            "Status Quo 'In The Army Now' (Live at Wacken 2017) - from 'Down Down & Dirty At Wacken",
+            "uro & Status Quo - In The Army Now (Remix) 💥💃 🕺 ✈ dance mix"
+        })
+        {
+            Check((bool)Call(null, "HasSameTrackName", first, title)!, "quoted live or emoji remix title matches song");
+            first.Tracks[0].Name = title;
+            Check((bool)Call(null, "HasSameTrackName", first, official)!, "quoted live or emoji remix title matches in reverse");
+        }
+        Check((string)Call(null, "NormalizeSongName", "Artist 'Don't Stop' (Live)")! == "Don t Stop", "apostrophe inside quoted song is preserved during extraction");
+        Check((string)Call(null, "NormalizeSongName", "Live Forever")! == "Live Forever", "version word inside song name is preserved");
+        first.Tracks[0].Name = "In The Army Now";
+        Check((bool)Call(null, "HasSameTrackName", first, "Status Quo In The Army Now special performance")!, "complete song phrase is found between arbitrary surrounding words");
+        Check(!(bool)Call(null, "HasSameTrackName", first, "In The Navy Now")!, "word sequence must remain consecutive");
+        Check(!(bool)Call(null, "HasSameTrackName", first, "In The Army Nowadays")!, "word matching does not match part of another word");
+        Check(!(bool)Call(null, "SongNamesMatch", "Love", "Love Story")!, "one shared word does not trigger a warning");
+        Check((bool)Call(null, "SongNamesMatch", "Special performance In The Army Now", "in the army now")!, "word sequence matching works in both directions");
     }
 
     private static void TestSharedCore(string root)
