@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       target_tag:
-        description: "Тег версии для сборки, например v1.1.5"
+        description: "Ветка или тег для сборки, например main или v1.1.11"
         required: true
         type: string
 
@@ -86,7 +86,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } elseif ('${{ inputs.target_tag }}') { '${{ inputs.target_tag }}' } else { "v$env:VERSION" }
+          $tag = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME } else { "v$env:VERSION" }
           $installer = ".\installer\Output\CatLuYNet-$env:VERSION-Setup.exe"
           $portable = ".\publish\CatLuYNet-$env:VERSION-win-x64.zip"
           gh release view $tag *> $null
