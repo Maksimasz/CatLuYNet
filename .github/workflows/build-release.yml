@@ -63,7 +63,13 @@ jobs:
 
       - name: Install Inno Setup
         shell: pwsh
-        run: choco install innosetup --yes --no-progress
+        run: |
+          $setup = Join-Path $env:RUNNER_TEMP 'innosetup-7.1.0-x64.exe'
+          Invoke-WebRequest 'https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe' -OutFile $setup
+          if ((Get-AuthenticodeSignature -LiteralPath $setup).Status -ne 'Valid') { throw 'Invalid Inno Setup signature' }
+          $process = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -WindowStyle Hidden -Wait -PassThru
+          if ($process.ExitCode -notin @(0, 3010)) { throw "Inno Setup installation failed: $($process.ExitCode)" }
+          if (!(Test-Path 'C:\Program Files\Inno Setup 7\ISCC.exe')) { throw 'Inno Setup 7.1.0 compiler not found' }
 
       - name: Check installer file replacement
         shell: pwsh
