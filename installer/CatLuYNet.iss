@@ -175,5 +175,9 @@ end;
 
 procedure RegisterExtraCloseApplicationsResources;
 begin
+#if VER < EncodeVer(7, 0, 0)
+  RegisterExtraCloseApplicationsResource(Is64BitInstallMode, ExpandConstant('{app}\{#AppExeName}'));
+#else
   RegisterExtraCloseApplicationsResource(ExpandConstant('{app}\{#AppExeName}'));
+#endif
 end;
