@@ -1,4 +1,4 @@
-﻿namespace YouTubeRadio;
+namespace YouTubeRadio;
 
 public sealed partial class PlaylistMainForm
 {
@@ -8,7 +8,7 @@ public sealed partial class PlaylistMainForm
 
         var miniForm = new Form
         {
-            Text = "CatLu YNet — мини-плеер", Icon = Icon, StartPosition = FormStartPosition.CenterScreen,
+            Text = S("catluYnetMiniPlayer"), Icon = Icon, StartPosition = FormStartPosition.CenterScreen,
             FormBorderStyle = FormBorderStyle.FixedToolWindow, ClientSize = new Size(430, 104),
             MinimumSize = new Size(430, 104), MaximumSize = new Size(430, 104),
             BackColor = Color.White, ForeColor = Color.FromArgb(25, 25, 25), ShowInTaskbar = false, TopMost = true
@@ -17,13 +17,13 @@ public sealed partial class PlaylistMainForm
         var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2, Padding = new Padding(7, 3, 7, 3), BackColor = Color.White };
         content.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
         content.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
-        miniTrackTitle = new Label { Dock = DockStyle.Fill, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = Color.FromArgb(25, 25, 25), Text = "Ничего не воспроизводится" };
+        miniTrackTitle = new Label { Dock = DockStyle.Fill, AutoSize = false, TextAlign = ContentAlignment.MiddleLeft, AutoEllipsis = true, Font = new Font("Segoe UI", 9, FontStyle.Bold), ForeColor = Color.FromArgb(25, 25, 25), Text = S("nothingIsPlaying") };
         var buttons = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false, Padding = new Padding(0, 1, 0, 0), Margin = Padding.Empty, BackColor = Color.White };
         var previous = MiniButton("◀◀", Color.FromArgb(230, 230, 230));
         miniPlayButton = MiniButton(paused || !player.IsPlaying ? "▶" : "❚❚", accentColor);
         var stop = MiniButton("■", Color.FromArgb(230, 230, 230));
         var next = MiniButton("▶▶", Color.FromArgb(230, 230, 230));
-        var restore = MiniButton("↗", Color.FromArgb(230, 230, 230)); restore.AccessibleName = "Развернуть"; new ToolTip().SetToolTip(restore, "Развернуть");
+        var restore = MiniButton("↗", Color.FromArgb(230, 230, 230)); RegisterLocalizedHint(restore, "restoreWindow");
         miniVolume = new TrackBar { Minimum = 0, Maximum = 100, Value = volume.Value, TickStyle = TickStyle.None, Width = 84, Height = 28, Margin = new Padding(2, 0, 0, 0) };
         buttons.Controls.AddRange([previous, miniPlayButton, stop, next, restore, miniVolume]);
         content.Controls.Add(miniTrackTitle, 0, 0);
@@ -49,7 +49,7 @@ public sealed partial class PlaylistMainForm
             if (paused || !player.IsPlaying) await PlayCurrentAsync(); else PausePlayback();
             UpdateMiniPlayer();
         };
-        stop.Click += (_, _) => { Stop(); status.Text = "Остановлено"; UpdateMiniPlayer(); };
+        stop.Click += (_, _) => { Stop(); SetStatus("stopped"); UpdateMiniPlayer(); };
         next.Click += async (_, _) => await NextAsync();
         restore.Click += (_, _) => RestoreMainPlayer();
         miniForm.FormClosing += (_, e) =>
@@ -58,7 +58,7 @@ public sealed partial class PlaylistMainForm
             e.Cancel = true;
             RestoreMainPlayer();
         };
-        miniForm.Show();
+        LocalizeDialog(miniForm).Show();
         StartDancingCat();
         UpdateMiniPlayer();
         Hide();
@@ -88,8 +88,13 @@ public sealed partial class PlaylistMainForm
 
     private void UpdateMiniPlayer()
     {
+        if (miniPlayerForm is not null)
+        {
+            miniPlayerForm.Text = T("catluYnetMiniPlayer");
+            LocalizeDialog(miniPlayerForm);
+        }
         if (miniTrackTitle is not null)
-            miniTrackTitle.Text = currentTrack is null ? "Ничего не воспроизводится" : $"{currentTrack.Name} — {currentTrack.Artist}";
+            miniTrackTitle.Text = currentTrack is null ? S("nothingIsPlaying") : $"{currentTrack.Name} — {currentTrack.Artist}";
         if (miniPlayButton is not null) miniPlayButton.Text = paused || !player.IsPlaying ? "▶" : "❚❚";
         if (!closing && IsHandleCreated && (settings.MusicLights || miniPlayerForm is not null)) StartDancingCat();
     }

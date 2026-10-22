@@ -1,4 +1,6 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
+using System.Text;
+using System.Text.RegularExpressions;
 using CatLuYNet.Core;
 
 namespace YouTubeRadio;
@@ -7,23 +9,23 @@ public sealed partial class PlaylistMainForm
 {
     private async Task SaveLinkAsync()
     {
-        if (!IsYouTubeUrl(urlBox.Text, out var isPlaylist)) { status.Text = "Введите ссылку YouTube"; return; }
+        if (!IsYouTubeUrl(urlBox.Text, out var isPlaylist)) { SetStatus("enterAYoutubeLink"); return; }
         try
         {
-            status.Text = "Чтение YouTube...";
+            SetStatus("readingYoutube");
             if (isPlaylist ? !await AddLinkedPlaylistAsync() : !await AddVideoToPlaylistAsync()) return;
             if (closing || !SaveLibrary()) return;
             urlBox.Clear();
-            status.Text = "Сохранено";
+            SetStatus("saved");
             RenderPlaylists();
         }
         catch (OperationCanceledException) when (closing) { }
-        catch (Exception ex) { if (!closing) status.Text = $"Ошибка: {Short(ex.Message)}"; }
+        catch (Exception ex) { if (!closing) SetStatus("error", Short(ex.Message)); }
     }
 
     private async Task<bool> AddLinkedPlaylistAsync()
     {
-        var title = Ask("Сохранить плейлист", "Название плейлиста:");
+        var title = Ask(S("savePlaylist"), S("playlistName"));
         if (string.IsNullOrWhiteSpace(title)) return false;
         var sourceUrl = urlBox.Text.Trim();
         var playlist = new Playlist { Name = title, Expanded = true, SourceUrl = sourceUrl, LastCheckedUtc = DateTime.UtcNow };
@@ -38,15 +40,65 @@ public sealed partial class PlaylistMainForm
         var playlist = SelectPlaylist();
         if (playlist is null) return false;
         var track = await ReadTrackAsync(urlBox.Text);
-        if (playlist.Tracks.All(item => item.Id != track.Id)) playlist.Tracks.Add(track);
+        if (closing || !playlists.Contains(playlist) || !TryAddTrack(playlist, track, this)) return false;
         playlist.Expanded = true;
         if (SaveLibrary() && downloadOnAdd.Checked) await DownloadTracksAsync(playlist, [playlist.Tracks.First(t => t.Id == track.Id)]);
         return true;
     }
 
+    private Playlist? FindTrackPlaylist(string id) => playlists.FirstOrDefault(
+        playlist => playlist.Tracks.Any(track => string.Equals(track.Id, id, StringComparison.Ordinal)));
+
+    private static bool HasSameTrackName(Playlist playlist, string name)
+    {
+        var songName = NormalizeSongName(name);
+        return songName.Length > 0 && playlist.Tracks.Any(track =>
+            SongNamesMatch(NormalizeSongName(track.Name), songName));
+    }
+
+    private static bool SongNamesMatch(string first, string second)
+    {
+        if (first.Length == 0 || second.Length == 0) return false;
+        if (string.Equals(first, second, StringComparison.OrdinalIgnoreCase)) return true;
+        var shorter = first.Length <= second.Length ? first : second;
+        var longer = first.Length <= second.Length ? second : first;
+        // Match the entire shorter title in order, at word boundaries; one common word is insufficient.
+        return shorter.Contains(' ') && (" " + longer + " ").Contains(" " + shorter + " ", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string NormalizeSongName(string name)
+    {
+        var title = name.Normalize(NormalizationForm.FormKC).Split('|', 2)[0];
+        title = Regex.Replace(title, @"\([^()]*\)|\[[^\[\]]*\]", " ");
+        title = title.Replace('‘', '\'').Replace('’', '\'').Replace('“', '"').Replace('”', '"');
+        var quoted = Regex.Match(title, @"(?:^|\s)(['""])(?<title>.+?)\1(?=\s|$)");
+        // YouTube titles commonly use "Artist - Song" and append release years.
+        title = quoted.Success ? quoted.Groups["title"].Value : new Regex(@"\s+[-–—]\s+").Split(title, 2).Last();
+        title = Regex.Replace(title, @"\p{Cf}", "");
+        title = Regex.Replace(title, @"[\p{S}\p{Cs}]", " ");
+        if (!quoted.Success)
+            title = Regex.Replace(title, @"(?:\s+(?:(?:19|20)\d{2}|(?:dance\s+)?(?:remix|mix)|cover|live|official(?:\s+music)?\s+video(?:\s+hd)?))+\s*$", "", RegexOptions.IgnoreCase);
+        return Regex.Replace(title, @"[\p{P}\s]+", " ").Trim();
+    }
+
+    private bool TryAddTrack(Playlist playlist, Track track, IWin32Window dialogOwner)
+    {
+        var existing = FindTrackPlaylist(track.Id);
+        if (existing is not null)
+        {
+            MessageBox.Show(dialogOwner, S("duplicateTrackLink", existing.Name), Text, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return false;
+        }
+        if (HasSameTrackName(playlist, track.Name) &&
+            MessageBox.Show(dialogOwner, S("duplicateTrackName", track.Name, playlist.Name), Text,
+                MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) != DialogResult.Yes) return false;
+        playlist.Tracks.Add(track);
+        return true;
+    }
+
     private void CreatePlaylist()
     {
-        var title = Ask("Новый плейлист", "Название плейлиста:");
+        var title = Ask(S("newPlaylistMessage"), S("playlistName"));
         if (string.IsNullOrWhiteSpace(title)) return;
         playlists.Add(new Playlist { Name = title, Expanded = true });
         SaveLibrary();
@@ -55,18 +107,18 @@ public sealed partial class PlaylistMainForm
 
     private Playlist? SelectPlaylist()
     {
-        using var dialog = new Form { Text = "Выберите плейлист", Size = new Size(420, 420), StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(35, 35, 35), ForeColor = Color.White, MinimizeBox = false, MaximizeBox = false };
+        using var dialog = new Form { Text = S("selectAPlaylist"), Size = new Size(420, 420), StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(35, 35, 35), ForeColor = Color.White, MinimizeBox = false, MaximizeBox = false };
         var list = new ListBox { Dock = DockStyle.Fill, DataSource = playlists, DisplayMember = nameof(Playlist.Name), BackColor = Color.FromArgb(35, 35, 35), ForeColor = Color.White, BorderStyle = BorderStyle.None, Font = new Font("Segoe UI", 11) };
-        var select = Button("Сохранить", Color.FromArgb(229, 9, 20));
-        var create = Button("＋ Новый", Color.FromArgb(55, 55, 55));
+        var select = Button(S("save"), Color.FromArgb(229, 9, 20));
+        var create = Button(S("new"), Color.FromArgb(55, 55, 55));
         var footer = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 58, Padding = new Padding(5) };
         footer.Controls.AddRange([create, select]);
         dialog.Controls.Add(list);
         dialog.Controls.Add(footer);
         Playlist? selected = null;
         select.Click += (_, _) => { selected = list.SelectedItem as Playlist; if (selected is not null) dialog.Close(); };
-        create.Click += (_, _) => { var title = Ask("Новый плейлист", "Название плейлиста:"); if (!string.IsNullOrWhiteSpace(title)) { selected = new Playlist { Name = title, Expanded = true }; playlists.Add(selected); dialog.Close(); } };
-        dialog.ShowDialog(this);
+        create.Click += (_, _) => { var title = Ask(S("newPlaylistMessage"), S("playlistName")); if (!string.IsNullOrWhiteSpace(title)) { selected = new Playlist { Name = title, Expanded = true }; playlists.Add(selected); dialog.Close(); } };
+        LocalizeDialog(dialog).ShowDialog(this);
         return selected;
     }
 
@@ -118,7 +170,7 @@ public sealed partial class PlaylistMainForm
         edit.Click += (_, _) => EditPlaylist(playlist);
         delete.Click += (_, _) =>
         {
-            if (MessageBox.Show($"Удалить плейлист «{playlist.Name}»?", Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
+            if (MessageBox.Show(S("deletePlaylist", playlist.Name), Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                 DeletePlaylist(playlist);
         };
         actions.Controls.Add(edit, 0, 0); actions.Controls.Add(delete, 1, 0);
@@ -164,7 +216,7 @@ public sealed partial class PlaylistMainForm
     private void EditPlaylist(Playlist playlist)
     {
         using var dialog = new PlaylistEditorDialog(this, playlist);
-        dialog.ShowDialog(this);
+        LocalizeDialog(dialog).ShowDialog(this);
     }
 
     private void RemoveTrack(Playlist playlist, Track track)

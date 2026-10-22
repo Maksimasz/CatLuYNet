@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using CatLuYNet.Core;
 using LibVLCSharp.Shared;
 
@@ -52,27 +52,27 @@ public sealed partial class PlaylistMainForm
     {
         try
         {
-            status.Text = "Получение аудиопотока...";
+            SetStatus("loadingAudioStream");
             media = new Media(vlc, await ResolveAudioAsync(track, token));
             if (settings.NormalizeAudio) media.AddOption(":audio-filter=compressor");
             SetPlaybackVolume(volume.Value);
-            if (!player.Play(media)) throw new InvalidOperationException("LibVLC не открыл поток.");
+            if (!player.Play(media)) throw new InvalidOperationException(S("libvlcCouldNotOpenTheStream"));
             crossfadeTimer.Start();
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
-        catch (Exception ex) { if (!closing && !token.IsCancellationRequested) status.Text = $"Ошибка: {Short(ex.Message)}"; }
+        catch (Exception ex) { if (!closing && !token.IsCancellationRequested) SetStatus("error", Short(ex.Message)); }
     }
 
     private void PausePlayback()
     {
         if (paused) return;
-        if (media is null) { Stop(); status.Text = "Пауза"; return; }
+        if (media is null) { Stop(); SetStatus("paused"); return; }
         paused = true;
         player.SetPause(true);
         incomingPlayer?.SetPause(true);
         crossfadeElapsed.Stop();
         crossfadeTimer.Stop();
-        status.Text = "Пауза";
+        SetStatus("paused");
         UpdateMiniPlayer();
     }
 
@@ -109,11 +109,11 @@ public sealed partial class PlaylistMainForm
         target.Playing += (_, _) => PostPlayerEvent(target, () =>
         {
             if (currentTrack?.IsNew == true) { currentTrack.IsNew = false; SaveLibrary(); RenderPlaylists(); }
-            status.Text = paused ? "Пауза" : $"Играет: {currentTrack?.Name} · {PlaybackSource()}";
+            if (paused) SetStatus("paused"); else SetStatus("playingTrack", currentTrack?.Name, PlaybackSource());
             UpdateMiniPlayer();
         });
-        target.Paused += (_, _) => PostPlayerEvent(target, () => { status.Text = "Пауза"; UpdateMiniPlayer(); });
-        target.EncounteredError += (_, _) => PostPlayerEvent(target, () => status.Text = "Ошибка аудиопотока");
+        target.Paused += (_, _) => PostPlayerEvent(target, () => { SetStatus("paused"); UpdateMiniPlayer(); });
+        target.EncounteredError += (_, _) => PostPlayerEvent(target, () => SetStatus("audioStreamError"));
         target.EndReached += (_, _) => PostPlayerEnded(target);
     }
 
@@ -203,7 +203,7 @@ public sealed partial class PlaylistMainForm
         if (settings.NormalizeAudio) incomingMedia.AddOption(":audio-filter=compressor");
         incomingPlayer = new MediaPlayer(vlc) { Volume = 0, Mute = false };
         AttachPlayerEvents(incomingPlayer);
-        if (!incomingPlayer.Play(incomingMedia)) throw new InvalidOperationException("LibVLC не открыл следующий поток.");
+        if (!incomingPlayer.Play(incomingMedia)) throw new InvalidOperationException(S("libvlcCouldNotOpenTheNextStream"));
         incomingTrack = next;
         crossfadeElapsed.Restart();
         if (paused) { incomingPlayer.SetPause(true); crossfadeElapsed.Stop(); }
@@ -216,7 +216,7 @@ public sealed partial class PlaylistMainForm
         incomingPlayer?.Dispose(); incomingPlayer = null;
         incomingMedia?.Dispose(); incomingMedia = null;
         isCrossfading = false;
-        status.Text = $"Кроссфейд: {Short(error.Message)}";
+        SetStatus("crossfadeMessage", Short(error.Message));
         if (!paused && currentTrackEnded) await NextAsync();
     }
 
@@ -237,7 +237,7 @@ public sealed partial class PlaylistMainForm
         crossfadeAttemptedTrack = null;
         outgoingPlayer.Dispose();
         RenderPlaylists(true);
-        status.Text = $"Играет: {currentTrack?.Name} · {PlaybackSource()}";
+        SetStatus("playingTrack", currentTrack?.Name, PlaybackSource());
         UpdateMiniPlayer();
     }
 

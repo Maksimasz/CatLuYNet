@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.Json;
 using CatLuYNet.Core;
 using LibVLCSharp.Shared;
@@ -7,10 +7,10 @@ namespace YouTubeRadio;
 
 public sealed partial class PlaylistMainForm : Form
 {
-    private readonly TextBox urlBox = new() { PlaceholderText = "Вставьте ссылку на ролик или плейлист YouTube", Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(42, 42, 42), ForeColor = Color.White, Font = new Font("Segoe UI", 11) };
+    private readonly TextBox urlBox = new() { PlaceholderText = S("url"), Dock = DockStyle.Fill, BorderStyle = BorderStyle.FixedSingle, BackColor = Color.FromArgb(42, 42, 42), ForeColor = Color.White, Font = new Font("Segoe UI", 11) };
     private readonly FlowLayoutPanel playlistHost = new() { Dock = DockStyle.Fill, AutoScroll = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Color.FromArgb(15, 15, 15), Padding = new Padding(5) };
     private readonly NoFocusTrackBar volume = new() { Minimum = 0, Maximum = 100, Value = 70, Width = 160, TickStyle = TickStyle.None };
-    private readonly Label status = new() { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(5, 3, 0, 0), ForeColor = Color.Silver, BackColor = Color.FromArgb(20, 20, 20), Text = "Готов", TextAlign = ContentAlignment.MiddleLeft, Tag = "muted" };
+    private readonly Label status = new() { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(5, 3, 0, 0), ForeColor = Color.Silver, BackColor = Color.FromArgb(20, 20, 20), Text = S("ready"), TextAlign = ContentAlignment.MiddleLeft, Tag = "muted" };
     private readonly Label clock = new() { Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleRight, Padding = new Padding(0, 0, 5, 0), ForeColor = Color.Silver, Visible = false, Tag = "muted" };
     private readonly List<Playlist> playlists = [];
     private readonly string statePath;
@@ -81,6 +81,7 @@ public sealed partial class PlaylistMainForm : Form
         oldStatePath = legacyPath;
         Core.Initialize();
         settings = LoadSettings();
+        ApplyLanguage();
         vlc = new LibVLC("--no-video", "--network-caching=1000");
         catVlc = new LibVLC("--no-audio");
         catPlayer = new MediaPlayer(catVlc) { Volume = 0 };
@@ -95,14 +96,14 @@ public sealed partial class PlaylistMainForm : Form
         BackColor = Color.FromArgb(15, 15, 15);
         ForeColor = Color.White;
 
-        var save = Button("Сохранить", accentColor);
-        var create = new Label { Text = "+ СОЗДАТЬ ПЛЕЙЛИСТ", AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = Color.FromArgb(229, 9, 20), BackColor = Color.FromArgb(20, 20, 20), Cursor = Cursors.Hand, Tag = "accent" };
+        var save = Button(S("save"), accentColor);
+        var create = new Label { Text = S("newPlaylist"), AutoSize = false, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter, Font = new Font("Segoe UI", 10, FontStyle.Bold), ForeColor = Color.FromArgb(229, 9, 20), BackColor = Color.FromArgb(20, 20, 20), Cursor = Cursors.Hand, Tag = "accent" };
         var previous = Button("◀◀", Color.FromArgb(42, 42, 42));
         var play = Button("▶", accentColor);
         var pause = Button("❚❚", Color.FromArgb(42, 42, 42));
         var stop = Button("■", Color.FromArgb(42, 42, 42));
         var next = Button("▶▶", Color.FromArgb(42, 42, 42));
-        var mini = Button("▣", surfaceColor); mini.Size = new Size(36, 36); mini.Margin = Padding.Empty; mini.Dock = DockStyle.None; mini.Tag = "header-action"; mini.TabStop = false; mini.AccessibleName = "Мини-плеер"; new ToolTip().SetToolTip(mini, "Мини-плеер");
+        var mini = Button("▣", surfaceColor); mini.Size = new Size(36, 36); mini.Margin = Padding.Empty; mini.Dock = DockStyle.None; mini.Tag = "header-action"; mini.TabStop = false; RegisterLocalizedHint(mini, "miniPlayer");
         mini.FlatAppearance.MouseOverBackColor = surfaceColor; mini.FlatAppearance.MouseDownBackColor = surfaceColor;
         var appVersion = typeof(PlaylistMainForm).Assembly.GetName().Version?.ToString(3) ?? "1.0";
         var header = new Label { Text = $"CatLu YNet {appVersion}", AutoSize = true, Font = new Font("Segoe UI", 14, FontStyle.Bold), ForeColor = Color.White, BackColor = surfaceColor, Tag = "header" };
@@ -131,7 +132,7 @@ public sealed partial class PlaylistMainForm : Form
         stationBar.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         stationBar.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220));
         stationBar.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-        var stationTitle = new Label { Text = "Плейлисты", Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Font = new Font("Segoe UI", 12, FontStyle.Bold) };
+        var stationTitle = new Label { Text = S("stations"), Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft, Font = new Font("Segoe UI", 12, FontStyle.Bold) };
         stationBar.Controls.Add(stationTitle, 0, 0);
         stationBar.Controls.Add(create, 1, 0);
         var input = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, BackColor = Color.FromArgb(15, 15, 15), Padding = new Padding(5) };
@@ -143,7 +144,7 @@ public sealed partial class PlaylistMainForm : Form
         input.Controls.Add(downloadOnAdd, 1, 0);
         input.Controls.Add(save, 2, 0);
         var controls = new FlowLayoutPanel { Dock = DockStyle.Fill, Margin = Padding.Empty, Padding = new Padding(5), BackColor = Color.FromArgb(20, 20, 20) };
-        var volumeTitle = new Label { Text = "Громкость", AutoSize = true, Padding = new Padding(5, 5, 0, 0), ForeColor = Color.Silver, Tag = "muted" };
+        var volumeTitle = new Label { Text = S("volume"), AutoSize = true, Padding = new Padding(5, 5, 0, 0), ForeColor = Color.Silver, Tag = "muted" };
         controls.Controls.AddRange([previous, play, pause, stop, next, volumeTitle, volume]);
         var controlRow = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, BackColor = surfaceColor };
         controlRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
@@ -175,6 +176,7 @@ public sealed partial class PlaylistMainForm : Form
         root.Controls.Add(bottom, 0, 4);
         Controls.Add(root);
 
+        RegisterLocalized(downloadOnAdd, "downloadMp3");
         RegisterLocalized(save, "save"); RegisterLocalized(create, "newPlaylist"); RegisterLocalized(stationTitle, "stations"); RegisterLocalized(volumeTitle, "volume");
 
         Load += async (_, _) => { LoadLibrary(); if (settings.MusicLights) StartDancingCat(); updateCheckTimer.Start(); _ = CheckForUpdateAsync(false); await CheckLinkedPlaylistsAsync(); };
@@ -185,7 +187,7 @@ public sealed partial class PlaylistMainForm : Form
         previous.Click += async (_, _) => await PreviousAsync();
         play.Click += async (_, _) => await PlayCurrentAsync();
         pause.Click += (_, _) => PausePlayback();
-        stop.Click += (_, _) => { Stop(); status.Text = "Остановлено"; };
+        stop.Click += (_, _) => { Stop(); SetStatus("stopped"); };
         next.Click += async (_, _) => await NextAsync();
         mini.Click += (_, _) => ShowMiniPlayer();
         volume.Scroll += (_, _) => SetPlaybackVolume(volume.Value);
@@ -209,6 +211,7 @@ public sealed partial class PlaylistMainForm : Form
             lifetime.Cancel();
             Stop();
             StopDancingCat();
+            localizedToolTip.Dispose();
             infoTimer.Dispose(); visualizerTimer.Dispose(); crossfadeTimer.Dispose(); updateCheckTimer.Dispose();
             catPlayer.Dispose(); catVlc.Dispose(); player.Dispose(); vlc.Dispose(); http.Dispose();
             playbackRequest.Dispose(); lifetime.Dispose();
@@ -228,7 +231,7 @@ public sealed partial class PlaylistMainForm : Form
         catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
         {
             libraryLoaded = false;
-            status.Text = $"Библиотека не прочитана; сохранение отключено: {Short(ex.Message)}";
+            SetStatus("libraryReadError", Short(ex.Message));
         }
         RenderPlaylists();
     }
@@ -237,13 +240,13 @@ public sealed partial class PlaylistMainForm : Form
     {
         if (!libraryLoaded)
         {
-            status.Text = "Сохранение отключено: исходная библиотека не была прочитана. Файл сохранён без изменений.";
+            SetStatus("librarySavingDisabled");
             return false;
         }
         try { PlaylistStore.Save(statePath, playlists); return true; }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            status.Text = $"Библиотека не сохранена: {Short(ex.Message)}";
+            SetStatus("librarySaveError", Short(ex.Message));
             return false;
         }
     }
@@ -254,7 +257,7 @@ public sealed partial class PlaylistMainForm : Form
         using var dialog = new Form { Text = title, Size = new Size(390, 160), StartPosition = FormStartPosition.CenterParent, BackColor = Color.FromArgb(35, 35, 35), ForeColor = Color.White, MinimizeBox = false, MaximizeBox = false };
         var input = new TextBox { Dock = DockStyle.Fill, BackColor = Color.FromArgb(55, 55, 55), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
         var text = new Label { Text = label, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
-        var save = Button("Сохранить", Color.FromArgb(229, 9, 20));
+        var save = Button(S("save"), Color.FromArgb(229, 9, 20));
         var actions = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Padding = new Padding(0, 5, 0, 0) };
         actions.Controls.Add(save);
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 3, Padding = new Padding(5) };
@@ -264,9 +267,9 @@ public sealed partial class PlaylistMainForm : Form
         layout.Controls.Add(text, 0, 0); layout.Controls.Add(input, 0, 1); layout.Controls.Add(actions, 0, 2);
         dialog.Controls.Add(layout);
         save.Click += (_, _) => dialog.DialogResult = DialogResult.OK;
-        return dialog.ShowDialog(this) == DialogResult.OK ? input.Text.Trim() : null;
+        return LocalizeDialog(dialog).ShowDialog(this) == DialogResult.OK ? input.Text.Trim() : null;
     }
-    private static string Short(string value) { var clean = value.Replace(Environment.NewLine, " "); return clean[..Math.Min(clean.Length, 110)]; }
+    private static string Short(string value) { var clean = TranslateCoreError(value).Replace(Environment.NewLine, " "); return clean[..Math.Min(clean.Length, 110)]; }
 
     private sealed class NoFocusTrackBar : TrackBar
     {

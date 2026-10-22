@@ -1,4 +1,4 @@
-﻿using CatLuYNet.Core;
+using CatLuYNet.Core;
 
 namespace YouTubeRadio;
 
@@ -11,13 +11,13 @@ public sealed partial class PlaylistMainForm
         private readonly TextBox name;
         private readonly ListBox tracks;
         private readonly TextBox link;
-        private readonly CheckBox download = new() { Text = "Скачать MP3", AutoSize = true };
+        private readonly CheckBox download = new() { Text = S("downloadMp3"), AutoSize = true };
 
         public PlaylistEditorDialog(PlaylistMainForm owner, Playlist playlist)
         {
             this.owner = owner;
             this.playlist = playlist;
-            Text = $"Плейлист: {playlist.Name}";
+            Text = S("playlist", playlist.Name);
             var workingArea = Screen.FromControl(owner).WorkingArea;
             MaximumSize = workingArea.Size;
             MinimumSize = new Size(Math.Min(500, workingArea.Width), Math.Min(420, workingArea.Height));
@@ -31,30 +31,32 @@ public sealed partial class PlaylistMainForm
 
             name = new TextBox { Text = playlist.Name, Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 11) };
             tracks = new ListBox { Dock = DockStyle.Fill, Margin = Padding.Empty, DrawMode = DrawMode.OwnerDrawVariable, BackColor = Color.FromArgb(35, 35, 35), ForeColor = Color.White, BorderStyle = BorderStyle.None, Font = new Font("Segoe UI", 10), IntegralHeight = false, HorizontalScrollbar = false };
-            link = new TextBox { Dock = DockStyle.Fill, Margin = Padding.Empty, PlaceholderText = "Ссылка YouTube для добавления", BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
+            link = new TextBox { Dock = DockStyle.Fill, Margin = Padding.Empty, PlaceholderText = S("youtubeLinkToAdd"), BackColor = Color.FromArgb(45, 45, 45), ForeColor = Color.White, BorderStyle = BorderStyle.FixedSingle };
             BuildLayout();
+            link.RightToLeft = RightToLeft.No;
             ConfigureTrackList();
             RefreshTracks();
+            LocalizeDialog(this);
         }
 
         private void BuildLayout()
         {
-            var rename = Button("Переименовать", Color.FromArgb(55, 55, 55));
-            var add = Button("Добавить", Color.FromArgb(229, 9, 20));
+            var rename = Button(S("rename"), Color.FromArgb(55, 55, 55));
+            var add = Button(S("add"), Color.FromArgb(229, 9, 20));
             var up = Button("↑", Color.FromArgb(55, 55, 55));
             var down = Button("↓", Color.FromArgb(55, 55, 55));
             var linkPlaylist = Button(owner.T("linkPlaylist"), Color.FromArgb(55, 55, 55));
-            var remove = Button("Удалить", Color.FromArgb(229, 9, 20));
-            var removePlaylist = Button("Удалить весь плейлист", Color.FromArgb(229, 9, 20));
-            var close = Button("Закончить редактирование плейлиста", Color.FromArgb(55, 55, 55));
+            var remove = Button(S("delete"), Color.FromArgb(229, 9, 20));
+            var removePlaylist = Button(S("deleteEntirePlaylist"), Color.FromArgb(229, 9, 20));
+            var close = Button(S("finishEditingPlaylist"), Color.FromArgb(55, 55, 55));
             var actions = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = new Padding(0, 5, 0, 0) };
             actions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             for (var i = 0; i < 3; i++) actions.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
-            var downloadOne = Button("Скачать выбранный MP3", Color.FromArgb(55, 55, 55));
-            var downloadAll = Button("Скачать все MP3", Color.FromArgb(55, 55, 55));
+            var downloadOne = Button(S("downloadSelectedMp3"), Color.FromArgb(55, 55, 55));
+            var downloadAll = Button(S("downloadAllMp3"), Color.FromArgb(55, 55, 55));
             downloadOne.Click += async (_, _) => { if (tracks.SelectedItem is Track track) { await owner.DownloadTracksAsync(playlist, [track]); tracks.Invalidate(); } };
             downloadAll.Click += async (_, _) => { await owner.DownloadTracksAsync(playlist, playlist.Tracks.ToList()); tracks.Invalidate(); };
-            var deleteMp3 = Button("Удалить MP3 с диска", Color.FromArgb(229, 9, 20));
+            var deleteMp3 = Button(S("deleteLocalMp3"), Color.FromArgb(229, 9, 20));
             deleteMp3.Click += (_, _) => DeleteSelectedMp3();
             foreach (var button in new[] { up, down, linkPlaylist, remove, removePlaylist, downloadOne, downloadAll, deleteMp3, close })
             {
@@ -161,17 +163,17 @@ public sealed partial class PlaylistMainForm
         {
             if (tracks.SelectedItem is not Track track) return;
             var path = owner.LocalAudio(track);
-            if (path is null) { MessageBox.Show(this, "Локальный MP3 этого трека не найден.", "Удалить MP3"); return; }
-            if (MessageBox.Show(this, $"Удалить MP3 с диска?\n{path}\n\nСсылка на YouTube останется. Этот файл может использоваться другими плейлистами.", "Удалить MP3", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            if (path is null) { MessageBox.Show(this, S("localMp3NotFound"), S("deleteMp3")); return; }
+            if (MessageBox.Show(this, S("confirmDeleteMp3", path), S("deleteMp3"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             try { owner.DeleteLocalAudio(track); tracks.Invalidate(); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { MessageBox.Show(this, ex.Message, "Ошибка удаления MP3", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { MessageBox.Show(this, ex.Message, S("mp3DeleteError"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
         }
 
         private void RenamePlaylist()
         {
             if (string.IsNullOrWhiteSpace(name.Text)) return;
             playlist.Name = name.Text.Trim();
-            Text = $"Плейлист: {playlist.Name}";
+            Text = S("playlist", playlist.Name);
             owner.SaveLibrary();
             owner.RenderPlaylists();
         }
@@ -187,18 +189,18 @@ public sealed partial class PlaylistMainForm
 
         private void DeletePlaylist()
         {
-            if (MessageBox.Show($"Удалить плейлист «{playlist.Name}»?", owner.Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
+            if (MessageBox.Show(S("deletePlaylist", playlist.Name), owner.Text, MessageBoxButtons.YesNo, MessageBoxIcon.Warning) != DialogResult.Yes) return;
             owner.DeletePlaylist(playlist);
             Close();
         }
 
         private async Task LinkPlaylistAsync(Button button)
         {
-            var sourceUrl = owner.Ask("Связать с YouTube-плейлистом", "Ссылка на плейлист YouTube:");
+            var sourceUrl = owner.Ask(S("linkToAYoutubePlaylist"), S("youtubePlaylistLink"));
             if (string.IsNullOrWhiteSpace(sourceUrl)) return;
             if (!IsYouTubeUrl(sourceUrl, out var isPlaylist) || !isPlaylist)
             {
-                MessageBox.Show("Введите ссылку на плейлист YouTube.", "Неверная ссылка", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(S("enterAYoutubePlaylistLink"), S("invalidLink"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
             try
@@ -212,10 +214,10 @@ public sealed partial class PlaylistMainForm
                 if (!owner.SaveLibrary()) return;
                 RefreshTracks();
                 owner.RenderPlaylists();
-                owner.status.Text = $"Новых песен добавлено в начало: {added}";
+                owner.SetStatus("newSongsAddedAtTheBeginning", added);
             }
             catch (OperationCanceledException) when (owner.closing) { }
-            catch (Exception ex) { if (!owner.closing && !IsDisposed) MessageBox.Show(Short(ex.Message), "Ошибка проверки плейлиста", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            catch (Exception ex) { if (!owner.closing && !IsDisposed) MessageBox.Show(Short(ex.Message), S("playlistCheckError"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
             finally { if (!button.IsDisposed) button.Enabled = true; }
         }
 
@@ -227,18 +229,18 @@ public sealed partial class PlaylistMainForm
                 button.Enabled = false;
                 var track = await owner.ReadTrackAsync(link.Text);
                 if (owner.closing || IsDisposed || !owner.playlists.Contains(playlist)) return;
-                if (playlist.Tracks.All(item => item.Id != track.Id)) playlist.Tracks.Add(track);
+                if (!owner.TryAddTrack(playlist, track, this)) return;
                 link.Clear();
                 RefreshTracks();
                 if (owner.SaveLibrary() && download.Checked) await owner.DownloadTracksAsync(playlist, [playlist.Tracks.First(t => t.Id == track.Id)]);
                 owner.RenderPlaylists();
             }
             catch (OperationCanceledException) when (owner.closing) { }
-            catch (Exception ex) { if (!owner.closing && !IsDisposed) MessageBox.Show(Short(ex.Message), "Ошибка добавления", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            catch (Exception ex) { if (!owner.closing && !IsDisposed) MessageBox.Show(Short(ex.Message), S("couldNotAddTrack"), MessageBoxButtons.OK, MessageBoxIcon.Error); }
             finally { if (!button.IsDisposed) button.Enabled = true; }
         }
 
         private static bool IsYouTubeUrl(string value, out bool playlist) => YouTubeUrl.IsValid(value, out playlist);
-        private static string Short(string value) { var clean = value.Replace(Environment.NewLine, " "); return clean[..Math.Min(clean.Length, 110)]; }
+        private static string Short(string value) { var clean = TranslateCoreError(value).Replace(Environment.NewLine, " "); return clean[..Math.Min(clean.Length, 110)]; }
     }
 }

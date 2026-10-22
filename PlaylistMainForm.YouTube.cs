@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Text.Json;
 using CatLuYNet.Core;
 
@@ -22,7 +22,7 @@ public sealed partial class PlaylistMainForm
     {
         var due = playlists.Where(playlist => playlist.SourceUrl is not null && DateTime.UtcNow - playlist.LastCheckedUtc >= TimeSpan.FromDays(1)).ToList();
         if (due.Count == 0) return;
-        status.Text = "Проверка обновлений плейлистов...";
+        SetStatus("checkingForPlaylistUpdates");
         var checkedCount = 0;
         var addedCount = 0;
         var failedCount = 0;
@@ -42,13 +42,13 @@ public sealed partial class PlaylistMainForm
         {
             if (!SaveLibrary()) return;
             RenderPlaylists();
-            status.Text = $"Плейлисты проверены; новых песен: {addedCount}";
+            SetStatus("playlistsCheckedNewSongs", addedCount);
         }
-        else status.Text = "Не удалось проверить плейлисты YouTube";
-        if (failedCount > 0 && checkedCount > 0) status.Text += $"; ошибок: {failedCount}";
+        else SetStatus("couldNotCheckYoutubePlaylists");
+        if (failedCount > 0 && checkedCount > 0) status.Text += S("errors", failedCount);
     }
 
-    private static Track ToTrack(JsonElement value) => new() { Id = value.GetProperty("id").GetString() ?? "", Name = value.GetProperty("title").GetString() ?? "Без названия", Artist = value.TryGetProperty("uploader", out var author) ? author.GetString() ?? "YouTube" : "YouTube" };
+    private static Track ToTrack(JsonElement value) => new() { Id = value.GetProperty("id").GetString() ?? "", Name = value.GetProperty("title").GetString() ?? S("untitled"), Artist = value.TryGetProperty("uploader", out var author) ? author.GetString() ?? "YouTube" : "YouTube" };
     private static bool IsYouTubeUrl(string value, out bool playlist) => YouTubeUrl.IsValid(value, out playlist);
     private static string CleanVideoUrl(string value) => YouTubeUrl.CleanVideoUrl(value);
     private static Task<string> RunYtDlpAsync(CancellationToken token, params string[] arguments) => RunYtDlpWithTimeoutAsync(token, TimeSpan.FromMinutes(5), arguments);
@@ -70,14 +70,14 @@ public sealed partial class PlaylistMainForm
         try { result = await ReadProcessAsync(start, timeout.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (!token.IsCancellationRequested)
         {
-            throw new TimeoutException($"yt-dlp не завершил запрос за {limit.TotalMinutes:0} минут.");
+            throw new TimeoutException(S("ytDlpTimeout", limit.TotalMinutes));
         }
         if (result.ExitCode != 0)
         {
             var log = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CatLuYNet", "yt-dlp-error.log");
             Directory.CreateDirectory(Path.GetDirectoryName(log)!);
             File.WriteAllText(log, result.Error);
-            throw new InvalidOperationException(FormatYtDlpError(result.Error) + Environment.NewLine + "Журнал: " + log);
+            throw new InvalidOperationException(FormatYtDlpError(result.Error) + Environment.NewLine + S("log") + log);
         }
         return result.Output;
     }
@@ -86,20 +86,20 @@ public sealed partial class PlaylistMainForm
     {
         var lines = error.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
         var reason = lines.LastOrDefault(line => line.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
-            ?? lines.LastOrDefault() ?? "yt-dlp завершился с ошибкой без описания.";
+            ?? lines.LastOrDefault() ?? S("ytDlpFailedWithoutAnErrorDescription");
         if (reason.Contains("Video unavailable", StringComparison.OrdinalIgnoreCase))
-            return "YouTube сообщает: видео недоступно. Скачать этот ролик не удалось.";
+            return S("videoUnavailable");
         if (reason.Contains("Private video", StringComparison.OrdinalIgnoreCase))
-            return "Видео закрыто: для доступа требуется авторизация в YouTube.";
+            return S("privateVideo");
         if (reason.Contains("Sign in", StringComparison.OrdinalIgnoreCase))
-            return "YouTube требует входа в аккаунт. Скачать ролик без авторизации не удалось.";
+            return S("signInRequired");
         return reason;
     }
 
     private static async Task<(string Output, string Error, int ExitCode)> ReadProcessAsync(ProcessStartInfo start, CancellationToken token)
     {
         token.ThrowIfCancellationRequested();
-        using var process = Process.Start(start) ?? throw new InvalidOperationException("Не удалось запустить процесс.");
+        using var process = Process.Start(start) ?? throw new InvalidOperationException(S("couldNotStartTheProcess"));
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
         try { await process.WaitForExitAsync(token).ConfigureAwait(false); }
@@ -144,7 +144,7 @@ public sealed partial class PlaylistMainForm
                 SetUpdateLinkText($"{T("updateAvailable")} {updateVersion}");
                 updateLink!.Visible = updateUrl is not null;
                 if (showResult && updateUrl is not null) MessageBox.Show($"{T("updateAvailable")} {updateVersion}", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Information);
-                else if (showResult && updateUrl is null) MessageBox.Show($"Версия {newest} найдена, но установщик не опубликован.", T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                else if (showResult && updateUrl is null) MessageBox.Show(S("installerNotPublished", newest), T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             else if (showResult) MessageBox.Show(T("upToDate"), T("updates"), MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -169,17 +169,17 @@ public sealed partial class PlaylistMainForm
             using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, lifetime.Token);
             response.EnsureSuccessStatusCode();
             if (response.RequestMessage?.RequestUri is not { } downloadUri || !IsTrustedUpdateUrl(downloadUri))
-                throw new InvalidOperationException("Ссылка загрузки ведёт на неизвестный сайт.");
+                throw new InvalidOperationException(S("untrustedDownload"));
             await using (var source = await response.Content.ReadAsStreamAsync(lifetime.Token))
             await using (var destination = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
                 await source.CopyToAsync(destination, lifetime.Token);
 
             var installerPath = Path.Combine(Path.GetTempPath(), $"CatLuYNet-{updateVersion}-Setup.exe");
             File.Move(temporaryPath, installerPath, overwrite: true);
-            if (!SaveLibrary()) throw new IOException("Не удалось сохранить библиотеку перед обновлением.");
+            if (!SaveLibrary()) throw new IOException(S("saveBeforeUpdateError"));
             installingUpdate = true;
             if (Process.Start(new ProcessStartInfo(installerPath) { UseShellExecute = true, Verb = "runas" }) is null)
-                throw new InvalidOperationException("Не удалось запустить установщик.");
+                throw new InvalidOperationException(S("couldNotStartTheInstaller"));
             Close();
         }
         catch (Exception ex)
